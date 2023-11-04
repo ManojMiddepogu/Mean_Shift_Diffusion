@@ -78,6 +78,11 @@ class ClusteredDenoiseLossType(enum.Enum):
         return self == LossType.KL or self == LossType.RESCALED_KL
 
 
+class ClusteredGuidanceLossType(enum.Enum):
+    JS = enum.auto()  # use Jensen Shannon
+    WD = enum.auto()  # use Wasserstein Distance
+
+
 class ClusteredGaussianDiffusion:
     """
     Utilities for training and sampling diffusion models.
@@ -100,7 +105,8 @@ class ClusteredGaussianDiffusion:
         *,
         betas,
         model_mean_type,
-        loss_type,
+        guidance_loss_type,
+        denoise_loss_type,
         rescale_timesteps=False,
     ):
         self.model_mean_type = model_mean_type
