@@ -113,7 +113,7 @@ class ClusteredGaussianDiffusion:
             raise NotImplementedError(f"Model Mean Type {self.model_mean_type} not implemented!")
         self.model_var_type = model_Var_type
         if self.model_var_type not in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
-            raise NotImplementedError(f"Model Var Type {self.model_Var_type} not implemented!")
+            raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
         self.guidance_loss_type = gudiance_loss_type
         self.rescale_timesteps = rescale_timesteps
 
@@ -126,7 +126,7 @@ class ClusteredGaussianDiffusion:
         self.num_timesteps = int(betas.shape[0])
 
         alphas = 1.0 - betas
-        self.sqrt_alphas = np.sqrt(self.alphas)
+        self.sqrt_alphas = np.sqrt(alphas)
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.sqrt_alphas_cumprod_prev = np.sqrt(self.alphas_cumprod_prev)
@@ -140,29 +140,12 @@ class ClusteredGaussianDiffusion:
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
 
-        # calculations for posterior q(x_{t-1} | x_t, x_0)
-        self.posterior_variance = (
-            betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
-        )
-        # log calculation clipped because the posterior variance is 0 at the
-        # beginning of the diffusion chain.
-        self.posterior_log_variance_clipped = np.log(
-            np.append(self.posterior_variance[1], self.posterior_variance[1:])
-        )
-        self.posterior_mean_coef1 = (
-            betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
-        )
-        self.posterior_mean_coef2 = (
-            (1.0 - self.alphas_cumprod_prev)
-            * np.sqrt(alphas)
-            / (1.0 - self.alphas_cumprod)
-        )
-
     def q_mean_variance(self, x_start, t, mu_bar_y_t, sigma_bar_y_t):
         mean = (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
         ) + mu_bar_y_t
-        variance = sigma_bar_y_t ** 2
+        # CHECK - IS THIS VARIANCE CORRECT? SHOULDN'T THIS BE DIAGONAL?
+        variance = _boradcast_tensor(sigma_bar_y_t ** 2, x_start.shape)
         log_variance = np.log(variance)
         return mean, variance, log_variance
     
@@ -173,19 +156,37 @@ class ClusteredGaussianDiffusion:
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + mu_bar_y_t
-            + sigma_bar_y_t * noise
+            + _boradcast_tensor(sigma_bar_y_t, x_start.shape) * noise
         )
     
     def posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1):
-        return (sigma_bar_y_tm1 ** 2) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * ((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2))
+        return _boradcast_tensor(sigma_bar_y_tm1 ** 2, x_t.shape) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * _boradcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape))
     
     def q_posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None):
         posterior_variance = self.posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1)
-        if (t == 0):
-            # log calculation clipped because the posterior variance is 0 at the
-            # beginning of the diffusion chain.
-            assert sigma_bar_y_tp1 is not None # Need t+1 to compute log variance in this case
-        posterior_log_variance_clipped = np.log(self.posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t)) if t == 0 else np.log(posterior_variance)
+
+        t_is_zero = (t == 0)
+        # Make sure that `sigma_bar_y_tp1` is provided when it's needed
+        if t_is_zero.any():
+            assert sigma_bar_y_tp1 is not None, "sigma_bar_y_tp1 is required when any t == 0"
+
+        # Compute the log variance for t+1 where t is 0
+        if t_is_zero.any():
+            posterior_log_variance_t_plus_1 = torch.log(
+                self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero])
+            )
+        
+        # Prepare a tensor for the log variance clipped with the same shape as posterior_variance
+        posterior_log_variance_clipped = torch.empty_like(posterior_variance)
+        
+        # log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain.
+        # Assign the computed log variance for t+1 to the corresponding elements
+        if t_is_zero.any():
+            posterior_log_variance_clipped[t_is_zero] = posterior_log_variance_t_plus_1
+        
+        # Compute and assign the log variance for the rest of the batch
+        posterior_log_variance_clipped[~t_is_zero] = torch.log(posterior_variance[~t_is_zero])
+
         assert (
             posterior_variance.shape[0]
             == posterior_log_variance_clipped.shape[0]
@@ -200,7 +201,7 @@ class ClusteredGaussianDiffusion:
             + mu_bar_y_tm1
             + (
                 _extract_into_tensor(self.sqrt_alphas, t, x_t.shape)
-                * (sigma_bar_y_tm1 / sigma_bar_y_t)
+                * _boradcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t), x_t.shape)
                 * (x_t - _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * x_start - mu_bar_y_t)
             )
         )
@@ -224,18 +225,19 @@ class ClusteredGaussianDiffusion:
         assert t.shape == (B,)
         model_output = denoise_model(x, self._scale_timesteps(t), **model_kwargs)
 
-        if self.model_var_type in [ModelVarType.FIXED_SMALL, ModelVarType.FIXED_LARGE]:
+        if self.model_var_type in [ClusteredModelVarType.FIXED_SMALL, ModelVClusteredModelVarTypearType.FIXED_LARGE]:
             model_variance, model_log_variance = {
                 # CHECK - FOR FIXED_LARGE, AND FIXED_SMALL; THERE IS A SMALL DIFFERENCE AT T==0, IN TERMS OF VARIANCE NOT LOG VARIANCE VALUE. IS THIS CORRECT?
                 # CHECK - WRITE THIS EFFICIENTLY?
                 # for fixedlarge, we set the initial (log-)variance like so
                 # to get a better decoder log likelihood.
-                ModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
+                # CHECK - THIS IS INCORRECT, t IS FOR A BATCH NOT A SINGLE ELEMENT. MAKE CHANGES ACCORDING TO q_posterior_variance()
+                ClusteredModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
                      (sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2, np.log(sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2)),
-                ModelVarType.FIXED_SMALL: (self.q_posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
+                ClusteredModelVarType.FIXED_SMALL: (self.q_posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
             }[self.model_var_type]
         else:
-            raise NotImplementedError(f"Model Var Type {self.model_Var_type} not implemented!")
+            raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
 
         def process_xstart(x):
             if denoised_fn is not None:
@@ -246,7 +248,7 @@ class ClusteredGaussianDiffusion:
         
         if self.model_mean_type == ClusteredModelMeanType.EPSILON:
             pred_xstart = process_xstart(
-                self._predict_xstart_from_eps(x_t=x, t=t, eps=model_outpu,t, mu_bar_y_t=mu_bar_y_t, sigma_bar_y_t=sigma_bar_y_t)
+                self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output, mu_bar_y_t=mu_bar_y_t, sigma_bar_y_t=sigma_bar_y_t)
             )
             model_mean, _, _ = self.q_posterior_mean_variance(
                 pred_xstart, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1
@@ -269,12 +271,12 @@ class ClusteredGaussianDiffusion:
             x_t
             - _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * pred_xstart
             - mu_bar_y_t
-        ) / sigma_bar_y_t
+        ) / _boradcast_tensor(sigma_bar_y_t, x_t.shape)
 
     def _predict_xstart_from_eps(self, x_t, t, eps, mu_bar_y_t, sigma_bar_y_t):
         assert x_t.shape == eps.shape
         return (
-            (x_t - mu_bar_y_t - sigma_bar_y_t * eps) / _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape)
+            (x_t - mu_bar_y_t - _boradcast_tensor(sigma_bar_y_t, x_t.shape) * eps) / _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape)
         )
 
     def _scale_timesteps(self, t):
@@ -412,68 +414,69 @@ class ClusteredGaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
     
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, y, model_kwargs=None, noise=None):
         # CHECK - LOSS IS NOT IMPLEMENTED YET.
+        # CHECK - FIX MODEL_KWARGS
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
-
+        
         terms = {}
+        
+        guidance_model = model.guidance_model
+        denoise_model = model.denoise_model
 
+        # CHECK - _boradcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
+        mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
+        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1) # CHECK - WHAT ARE THE VALUE OF T? USING T-1 => MODEL SHOULD GIVE 0 if T < 0. WOULD BE EASY DOING IT THIS WAY FOLLOWING 0 INDEX FOR TIME STEPS.
+        mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t == 0) else (None, None)
+
+        q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
+        # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
+        terms["guidance_loss"] = 0.0
+
+        x_t = self.q_sample(x_start, t, mu_bar_y_t, sigma_bar_y_t, noise)
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
-            terms["loss"] = self._vb_terms_bpd(
+            terms["denoise_loss"] = self._vb_terms_bpd(
                 model=model,
                 x_start=x_start,
                 x_t=x_t,
                 t=t,
+                mu_bar_y_t=mu_bar_y_t,
+                mu_bar_y_tm1=mu_bar_y_tm1,
+                sigma_bar_y_t=sigma_bar_y_t,
+                sigma_bar_y_tm1=sigma_bar_y_tm1,
+                sigma_bar_y_tp1=sigma_bar_y_tp1,
                 clip_denoised=False,
                 model_kwargs=model_kwargs,
             )["output"]
             if self.loss_type == LossType.RESCALED_KL:
-                terms["loss"] *= self.num_timesteps
+                terms["denoise_loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            # CHECK - ARGUMENTS FOR THE DENOISE MODEL, NEED Y, AND BETTER IT NOT BE PART OF MODEL_KWARGS
+            model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
 
-            if self.model_var_type in [
-                ModelVarType.LEARNED,
-                ModelVarType.LEARNED_RANGE,
-            ]:
-                B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
-                model_output, model_var_values = th.split(model_output, C, dim=1)
-                # Learn the variance using the variational bound, but don't let
-                # it affect our mean prediction.
-                frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
-                terms["vb"] = self._vb_terms_bpd(
-                    model=lambda *args, r=frozen_out: r,
-                    x_start=x_start,
-                    x_t=x_t,
-                    t=t,
-                    clip_denoised=False,
-                )["output"]
-                if self.loss_type == LossType.RESCALED_MSE:
-                    # Divide by 1000 for equivalence with initial implementation.
-                    # Without a factor of 1/1000, the VB term hurts the MSE term.
-                    terms["vb"] *= self.num_timesteps / 1000.0
+            if self.model_var_type not in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
+                raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
+            
+            if self.model_mean_type not in [ClusteredModelMeanType.EPSILON]:
+                raise NotImplementedError(f"Model Mean Type {self.model_mean_type} not implemented!")
 
             target = {
-                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
-                    x_start=x_start, x_t=x_t, t=t
-                )[0],
-                ModelMeanType.START_X: x_start,
-                ModelMeanType.EPSILON: noise,
+                ClusteredModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
-            if "vb" in terms:
-                terms["loss"] = terms["mse"] + terms["vb"]
+            terms["denoise_mse"] = mean_flat((target - model_output) ** 2)
+            if "vb" in terms: # CHECK - THIS TERM DOESN'T EXIST UNLESS WE LEARN SIGMA CASE? HOW IS THIS APPLICABLE IN OUR CASE? WE ARE LEARNING SIGMS IN SOME SENSE?
+                terms["denoise_loss"] = terms["denoise_mse"] + terms["vb"]
             else:
-                terms["loss"] = terms["mse"]
+                terms["denoise_loss"] = terms["denoise_mse"]
         else:
             raise NotImplementedError(self.loss_type)
 
+        # CHECK - ADD WEIGHTS HERE FOR LOSSES?
+        terms["loss"] = terms["guidance_loss"] + terms["denoise_loss"]
         return terms
 
 
@@ -491,3 +494,9 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)
+
+
+def _boradcast_tensor(t, broadcast_shape):
+    while len(t.shape) < len(broadcast_shape):
+        t = t[..., None]
+    return t.expand(broadcast_shape)
