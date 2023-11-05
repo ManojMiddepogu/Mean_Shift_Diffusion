@@ -1,6 +1,3 @@
-"""
-"""
-
 import enum
 import math
 
@@ -63,8 +60,8 @@ class ClusteredModelMeanType(enum.Enum):
     Which type of output the model predicts.
     """
 
-    PREVIOUS_X = enum.auto()  # the model predicts x_{t-1}
-    START_X = enum.auto()  # the model predicts x_0
+    PREVIOUS_X = enum.auto()  # the model predicts x_{t-1}, NOT IMPLEMENTED SHOULD BE EASY TO IMPLEMENT
+    START_X = enum.auto()  # the model predicts x_0, NOT IMPLEMENTED SHOULD BE EASY TO IMPLEMENT
     EPSILON = enum.auto()  # the model predicts epsilon
 
 
@@ -76,10 +73,10 @@ class ClusteredModelVarType(enum.Enum):
     values between FIXED_SMALL and FIXED_LARGE, making its job easier.
     """
 
-    LEARNED = enum.auto()
-    FIXED_SMALL = enum.auto()
-    FIXED_LARGE = enum.auto()
-    LEARNED_RANGE = enum.auto()
+    LEARNED = enum.auto() # NOT IMPLEMENTED
+    FIXED_SMALL = enum.auto() # SIGMA_TILDE^2(Y, T)
+    FIXED_LARGE = enum.auto() # BETA_T SIGMA^2(Y, T)
+    LEARNED_RANGE = enum.auto() # NOT IMPLEMENTED
 
 
 class ClusteredDenoiseLossType(enum.Enum):
@@ -179,16 +176,16 @@ class ClusteredGaussianDiffusion:
             + sigma_bar_y_t * noise
         )
     
-    def q_posterior_variance(self, x_t, t, sigma_bar_y_tm1):
-        posterior_variance = (
-            (sigma_bar_y_tm1 ** 2)
-            * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * ((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2))
-        )
-        # log calculation clipped because the posterior variance is 0 at the
-        # beginning of the diffusion chain.
-        posterior_log_variance_clipped = (
-            _extract_into_tensor(np.append(posterior_variance[1], posterior_variance[1:]),t, x_t.shape)
-        )
+    def posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1):
+        return (sigma_bar_y_tm1 ** 2) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * ((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2))
+    
+    def q_posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None):
+        posterior_variance = self.posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1)
+        if (t == 0):
+            # log calculation clipped because the posterior variance is 0 at the
+            # beginning of the diffusion chain.
+            assert sigma_bar_y_tp1 is not None # Need t+1 to compute log variance in this case
+        posterior_log_variance_clipped = np.log(self.posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t)) if t == 0 else np.log(posterior_variance)
         assert (
             posterior_variance.shape[0]
             == posterior_log_variance_clipped.shape[0]
@@ -196,7 +193,7 @@ class ClusteredGaussianDiffusion:
         )
         return posterior_variance, posterior_log_variance_clipped
     
-    def q_posterior_mean_variance(self, x_start, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1):
+    def q_posterior_mean_variance(self, x_start, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None):
         assert x_start.shape == x_t.shape
         posterior_mean = (
             _extract_into_tensor(self.sqrt_alphas_cumprod_prev, t, x_t.shape) * x_start
@@ -207,7 +204,7 @@ class ClusteredGaussianDiffusion:
                 * (x_t - _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * x_start - mu_bar_y_t)
             )
         )
-        posterior_variance, posterior_log_variance_clipped = self.q_posterior_variance(x_t, t, sigma_bar_y_tm1)
+        posterior_variance, posterior_log_variance_clipped = self.q_posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)
         assert (
             posterior_mean.shape[0]
             == posterior_variance.shape[0]
@@ -217,7 +214,7 @@ class ClusteredGaussianDiffusion:
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
-        self, denoise_model, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, clip_denoised=True, denoised_fn=None, model_kwargs=None
+        self, denoise_model, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
         model_kwargs = None # CHECK - NO NEED OF CLASS CONDITIONING, SO SETTING THIS TO NONE
         if model_kwargs is None:
@@ -229,17 +226,14 @@ class ClusteredGaussianDiffusion:
 
         if self.model_var_type in [ModelVarType.FIXED_SMALL, ModelVarType.FIXED_LARGE]:
             model_variance, model_log_variance = {
+                # CHECK - FOR FIXED_LARGE, AND FIXED_SMALL; THERE IS A SMALL DIFFERENCE AT T==0, IN TERMS OF VARIANCE NOT LOG VARIANCE VALUE. IS THIS CORRECT?
+                # CHECK - WRITE THIS EFFICIENTLY?
                 # for fixedlarge, we set the initial (log-)variance like so
                 # to get a better decoder log likelihood.
-                ModelVarType.FIXED_LARGE: (
-                    # CHECK - THIS IS NOT IMPLEMENTED YET, THIS IS FOR BETA_T AS POSTERIOR VARIANCE
-                    np.append(self.posterior_variance[1], self.betas[1:]),
-                    np.log(np.append(self.posterior_variance[1], self.betas[1:])),
-                ),
-                ModelVarType.FIXED_SMALL: (self.q_posterior_variance(x_t, t, sigma_bar_y_tm1)),
+                ModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
+                     (sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2, np.log(sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2)),
+                ModelVarType.FIXED_SMALL: (self.q_posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
             }[self.model_var_type]
-            model_variance = _extract_into_tensor(model_variance, t, x.shape)
-            model_log_variance = _extract_into_tensor(model_log_variance, t, x.shape)
         else:
             raise NotImplementedError(f"Model Var Type {self.model_Var_type} not implemented!")
 
@@ -255,9 +249,7 @@ class ClusteredGaussianDiffusion:
                 self._predict_xstart_from_eps(x_t=x, t=t, eps=model_outpu,t, mu_bar_y_t=mu_bar_y_t, sigma_bar_y_t=sigma_bar_y_t)
             )
             model_mean, _, _ = self.q_posterior_mean_variance(
-                x_start=pred_xstart, x_t=x, t=t,
-                mu_bar_y_t=mu_bar_y_t, mu_bar_y_tm1=mu_bar_y_tm1,
-                sigma_bar_y_t=sigma_bar_y_t, sigma_bar_y_tm1=sigma_bar_y_tm1
+                pred_xstart, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1
             )
         else:
             raise NotImplementedError(self.model_mean_type)
@@ -299,6 +291,7 @@ class ClusteredGaussianDiffusion:
         mu_bar_y_tm1,
         sigma_bar_y_t,
         sigma_bar_y_tm1,
+        sigma_bar_y_tp1=None,
         clip_denoised=True,
         denoised_fn=None,
         model_kwargs=None,
@@ -311,6 +304,7 @@ class ClusteredGaussianDiffusion:
             mu_bar_y_tm1,
             sigma_bar_y_t,
             sigma_bar_y_tm1,
+            sigma_bar_y_tp1,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
@@ -376,10 +370,16 @@ class ClusteredGaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
+                # CHECK - WRITE CODE TO GET GUIDANCE VALUES. HERE MODEL IS THE COMPLETE MODEL?
                 out = self.p_sample(
                     model,
                     img,
                     t,
+                    mu_bar_y_t,
+                    mu_bar_y_tm1,
+                    sigma_bar_y_t,
+                    sigma_bar_y_tm1,
+                    sigma_bar_y_tp1,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
@@ -388,13 +388,13 @@ class ClusteredGaussianDiffusion:
                 img = out["sample"]
     
     def _vb_terms_bpd(
-        self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None
+        self, model, x_start, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1, clip_denoised=True, model_kwargs=None
     ):
         true_mean, _, true_log_variance_clipped = self.q_posterior_mean_variance(
-            x_start, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1
+            x_start, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1
         )
         out = self.p_mean_variance(
-            model, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, clip_denoised=clip_denoised, model_kwargs=model_kwargs
+            model, x_t, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1, clip_denoised=clip_denoised, model_kwargs=model_kwargs
         )
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
