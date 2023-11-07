@@ -3,6 +3,7 @@ Train a diffusion model on images.
 """
 
 import argparse
+import wandb
 
 from guided_diffusion import dist_util, logger
 from guided_diffusion.image_datasets import load_data
@@ -21,6 +22,10 @@ def main():
 
     dist_util.setup_dist()
     logger.configure()
+    wandb.init(
+		entity = "llvm",
+		config = args,
+	)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -55,6 +60,8 @@ def main():
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
     ).run_loop()
+
+    wandb.finish()
 
 
 def create_argparser():
