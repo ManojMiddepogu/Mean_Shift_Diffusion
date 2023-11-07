@@ -5,7 +5,8 @@ from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
 
-NUM_CLASSES = 1000
+# NUM_CLASSES = 1000
+NUM_CLASSES = 10
 
 
 def diffusion_defaults():
@@ -94,7 +95,7 @@ def create_model_and_diffusion(
     use_scale_shift_norm,
     resblock_updown,
     use_fp16,
-    use_new_attention_order,
+    use_new_attention_order
 ):
     model = create_model(
         image_size,
@@ -112,7 +113,7 @@ def create_model_and_diffusion(
         dropout=dropout,
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
-        use_new_attention_order=use_new_attention_order,
+        use_new_attention_order=use_new_attention_order
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -143,7 +144,7 @@ def create_model(
     dropout=0,
     resblock_updown=False,
     use_fp16=False,
-    use_new_attention_order=False,
+    use_new_attention_order=False
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -154,6 +155,8 @@ def create_model(
             channel_mult = (1, 1, 2, 3, 4)
         elif image_size == 64:
             channel_mult = (1, 2, 3, 4)
+        elif image_size == 32:
+            channel_mult = (1, 2, 4)
         else:
             raise ValueError(f"unsupported image size: {image_size}")
     else:

@@ -372,9 +372,12 @@ class ClusteredGaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
-                # CHECK - WRITE CODE TO GET GUIDANCE VALUES. HERE MODEL IS THE COMPLETE MODEL?
+                guidance_model = model.guidance_model
+                mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
+                mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
+                mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t == 0) else (None, None)
                 out = self.p_sample(
-                    model,
+                    model.denoise_model,
                     img,
                     t,
                     mu_bar_y_t,
@@ -429,7 +432,7 @@ class ClusteredGaussianDiffusion:
 
         # CHECK - _boradcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
         mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
-        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1) # CHECK - WHAT ARE THE VALUE OF T? USING T-1 => MODEL SHOULD GIVE 0 if T < 0. WOULD BE EASY DOING IT THIS WAY FOLLOWING 0 INDEX FOR TIME STEPS.
+        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
         mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t == 0) else (None, None)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
