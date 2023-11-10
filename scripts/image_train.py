@@ -59,6 +59,11 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        # Sampling arguments for visualization during training
+        clip_denoised=args.clip_denoised,
+        num_samples_visualize=args.num_samples_visualize,
+        use_ddim=args.use_ddim,
+        image_size=args.image_size,
     ).run_loop()
 
     wandb.finish()
@@ -80,6 +85,12 @@ def create_argparser():
         use_fp16=False,
         fp16_scale_growth=1e-3,
     )
+    # Sampling arguments for visualization during training
+    defaults.update(dict(
+        clip_denoised=True,
+        num_samples_visualize=25,
+        use_ddim=False,
+    ))
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)

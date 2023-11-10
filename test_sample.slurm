@@ -17,10 +17,11 @@ source /ext3/env.sh
 cd /scratch/crg9968/llvm/Clustered_Diffusion
 conda activate venv
 
-OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run GPUS_PER_NODE=1 \
+OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run_mnist_first_run GPUS_PER_NODE=1 \
 python3 scripts/image_sample.py --num_samples 32 --batch_size 32 --use_ddim False \
- --model_path /scratch/crg9968/llvm/logs_test_run/model030000.pt \
+ --model_path /scratch/crg9968/llvm/logs_test_run_mnist_first_run/ema_0.9999_030000.pt \
  --image_size 32 --num_channels 64 \
- --num_res_blocks 2 --attention_resolutions "16,8"\
- --diffusion_steps 1000 --noise_schedule linear
+ --num_res_blocks 2 --attention_resolutions "16,8" \
+ --diffusion_steps 1000 --noise_schedule linear \
+ --save_images True
 "
