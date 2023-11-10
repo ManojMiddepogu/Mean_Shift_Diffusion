@@ -1,13 +1,16 @@
 import copy
 import functools
+import numpy as np
 import os
 import wandb
 
 import blobfile as bf
+from PIL import Image
 import torch as th
 import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
+from torchvision.utils import make_grid
 
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
@@ -39,6 +42,11 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        # Sampling arguments for visualization during training
+        clip_denoised=True,
+        num_samples_visualize=25,
+        use_ddim=False,
+        image_size=64,
     ):
         self.model = model
         self.diffusion = diffusion
@@ -59,6 +67,11 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+
+        self.clip_denoised = clip_denoised
+        self.num_samples_visualize = num_samples_visualize
+        self.use_ddim = use_ddim
+        self.image_size = image_size
 
         self.step = 0
         self.resume_step = 0
@@ -150,6 +163,26 @@ class TrainLoop:
                 opt_checkpoint, map_location=dist_util.dev()
             )
             self.opt.load_state_dict(state_dict)
+    
+    def _create_image_collage(self, samples, rows=8, cols=8):
+        # Assuming samples is a list of numpy arrays with shape (H, W, C)
+        h, w, c = samples[0].shape
+        collage_width = cols * w
+        collage_height = rows * h
+        collage = Image.new('RGB', (collage_width, collage_height))
+
+        # Paste images into collage
+        for i, np_img in enumerate(samples):
+            img = Image.fromarray(np_img.astype('uint8'))
+            # Calculate position of current image
+            row = i // cols
+            col = i % cols
+            position = (col * w, row * h)
+            collage.paste(img, position)
+            if i >= rows*cols - 1:  # Break after filling in rows x cols images
+                break
+
+        return collage
 
     def run_loop(self):
         while (
@@ -162,9 +195,38 @@ class TrainLoop:
                 logger.dumpkvs()
             if self.step % self.save_interval == 0:
                 self.save()
+
+                # Sample num_samples_visualize images everytime we save the model
+                if dist.get_rank() == 0:  # Make sure only the master process does the sampling
+                    self.ddp_model.eval()
+
+                    with th.no_grad():
+                        # Generate samples
+                        sample_fn = (
+                            self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
+                        )
+                        samples = sample_fn(
+                            self.ddp_model,
+                            (self.num_samples_visualize, 3, self.image_size, self.image_size),
+                            clip_denoised=self.clip_denoised,
+                            model_kwargs={}, # CHECK - HANDLE CLASS CONDITIONAL HERE?
+                        )
+                        # Normalize samples to [0, 255] and change to uint8
+                        samples = ((samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                        # Rearrange the tensor to be in HWC format for image saving
+                        samples = samples.permute(0, 2, 3, 1)
+                        samples = samples.contiguous()
+                        image_list = [sample.cpu().numpy() for sample in samples]
+                        collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
+
+                        wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]})
+                        
+                    self.ddp_model.train()
+                
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
+
             self.step += 1
         # Save the last checkpoint if it wasn't already saved.
         if (self.step - 1) % self.save_interval != 0:
@@ -229,7 +291,8 @@ class TrainLoop:
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
-        wandb.log({"step": self.step + self.resume_step, "samples": (self.step + self.resume_step + 1) * self.global_batch})
+        if dist.get_rank() == 0:
+            wandb.log({"step": self.step + self.resume_step, "samples": (self.step + self.resume_step + 1) * self.global_batch})
 
     def save(self):
         def save_checkpoint(rate, params):
@@ -305,5 +368,6 @@ def log_loss_dict(diffusion, ts, losses):
             quartile = int(4 * sub_t / diffusion.num_timesteps)
             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
             logged_data[f"{key}_q{quartile}"] = sub_loss
-    
-    wandb.log(logged_data)
+
+    if dist.get_rank() == 0:    
+        wandb.log(logged_data)

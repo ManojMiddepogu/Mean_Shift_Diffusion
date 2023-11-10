@@ -6,6 +6,7 @@ numpy array. This can be used to produce samples for FID evaluation.
 import argparse
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch as th
 import torch.distributed as dist
@@ -85,9 +86,37 @@ def main():
             np.savez(out_path, arr, label_arr)
         else:
             np.savez(out_path, arr)
+        
+        if args.save_images:
+            logger.log("creating sample image file")
+            
+            save_images(arr[:min(25, args.num_samples)], shape_str)
+
+            logger.log("sample image file complete")
 
     dist.barrier()
     logger.log("sampling complete")
+
+
+def save_images(arr, shape_str):
+    num_rows = 5  # Number of rows in the grid
+    num_cols = 5  # Number of columns in the grid
+    num_images = num_rows * num_cols
+
+    # Create a figure for the grid
+    plt.figure(figsize=(10, 10))
+
+    for i in range(num_images):
+        # Add a subplot for each image
+        plt.subplot(num_rows, num_cols, i + 1)
+        plt.imshow(arr[i])
+        plt.axis('off')
+
+    # Adjust spacing between subplots
+    plt.subplots_adjust(wspace=0.3, hspace=0.3)
+
+    save_path = os.path.join(logger.get_dir(), f"samples_{shape_str}_25.png")
+    plt.savefig(save_path, bbox_inches='tight')
 
 
 def create_argparser():
@@ -97,6 +126,7 @@ def create_argparser():
         batch_size=16,
         use_ddim=False,
         model_path="",
+        save_images=False,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
