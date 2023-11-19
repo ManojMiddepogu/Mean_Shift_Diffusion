@@ -111,10 +111,11 @@ class ClusteredGaussianDiffusion:
         self.model_mean_type = model_mean_type
         if self.model_mean_type not in [ClusteredModelMeanType.EPSILON]:
             raise NotImplementedError(f"Model Mean Type {self.model_mean_type} not implemented!")
-        self.model_var_type = model_Var_type
+        self.model_var_type = model_var_type
         if self.model_var_type not in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
             raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
-        self.guidance_loss_type = gudiance_loss_type
+        self.guidance_loss_type = guidance_loss_type
+        self.denoise_loss_type = denoise_loss_type
         self.rescale_timesteps = rescale_timesteps
 
         # Use float64 for accuracy.
@@ -125,9 +126,9 @@ class ClusteredGaussianDiffusion:
 
         self.num_timesteps = int(betas.shape[0])
 
-        alphas = 1.0 - betas
-        self.sqrt_alphas = np.sqrt(alphas)
-        self.alphas_cumprod = np.cumprod(alphas, axis=0)
+        self.alphas = 1.0 - betas
+        self.sqrt_alphas = np.sqrt(self.alphas)
+        self.alphas_cumprod = np.cumprod(self.alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.sqrt_alphas_cumprod_prev = np.sqrt(self.alphas_cumprod_prev)
         self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
@@ -146,7 +147,7 @@ class ClusteredGaussianDiffusion:
         ) + mu_bar_y_t
         # CHECK - IS THIS VARIANCE CORRECT? SHOULDN'T THIS BE DIAGONAL?
         variance = _boradcast_tensor(sigma_bar_y_t ** 2, x_start.shape)
-        log_variance = np.log(variance)
+        log_variance = th.log(variance)
         return mean, variance, log_variance
     
     def q_sample(self, x_start, t, mu_bar_y_t, sigma_bar_y_t, noise=None):
@@ -172,12 +173,12 @@ class ClusteredGaussianDiffusion:
 
         # Compute the log variance for t+1 where t is 0
         if t_is_zero.any():
-            posterior_log_variance_t_plus_1 = torch.log(
+            posterior_log_variance_t_plus_1 = th.log(
                 self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero])
             )
         
         # Prepare a tensor for the log variance clipped with the same shape as posterior_variance
-        posterior_log_variance_clipped = torch.empty_like(posterior_variance)
+        posterior_log_variance_clipped = th.empty_like(posterior_variance)
         
         # log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain.
         # Assign the computed log variance for t+1 to the corresponding elements
@@ -185,12 +186,12 @@ class ClusteredGaussianDiffusion:
             posterior_log_variance_clipped[t_is_zero] = posterior_log_variance_t_plus_1
         
         # Compute and assign the log variance for the rest of the batch
-        posterior_log_variance_clipped[~t_is_zero] = torch.log(posterior_variance[~t_is_zero])
+        posterior_log_variance_clipped[~t_is_zero] = th.log(posterior_variance[~t_is_zero])
 
         assert (
             posterior_variance.shape[0]
             == posterior_log_variance_clipped.shape[0]
-            == x_start.shape[0]
+            == x_t.shape[0]
         )
         return posterior_variance, posterior_log_variance_clipped
     
@@ -215,7 +216,7 @@ class ClusteredGaussianDiffusion:
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
-        self, denoise_model, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None, clip_denoised=True, denoised_fn=None, model_kwargs=None
+        self, model, x, t, mu_bar_y_t, mu_bar_y_tm1, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
         model_kwargs = None # CHECK - NO NEED OF CLASS CONDITIONING, SO SETTING THIS TO NONE
         if model_kwargs is None:
@@ -223,18 +224,20 @@ class ClusteredGaussianDiffusion:
 
         B, C = x.shape[:2]
         assert t.shape == (B,)
-        model_output = denoise_model(x, self._scale_timesteps(t), **model_kwargs)
+        model_output = model.denoise_model(x, self._scale_timesteps(t), **model_kwargs)
 
-        if self.model_var_type in [ClusteredModelVarType.FIXED_SMALL, ModelVClusteredModelVarTypearType.FIXED_LARGE]:
+        if self.model_var_type in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
             model_variance, model_log_variance = {
                 # CHECK - FOR FIXED_LARGE, AND FIXED_SMALL; THERE IS A SMALL DIFFERENCE AT T==0, IN TERMS OF VARIANCE NOT LOG VARIANCE VALUE. IS THIS CORRECT?
                 # CHECK - WRITE THIS EFFICIENTLY?
                 # for fixedlarge, we set the initial (log-)variance like so
                 # to get a better decoder log likelihood.
                 # CHECK - THIS IS INCORRECT, t IS FOR A BATCH NOT A SINGLE ELEMENT. MAKE CHANGES ACCORDING TO q_posterior_variance()
-                ClusteredModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
-                     (sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2, np.log(sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2)),
-                ClusteredModelVarType.FIXED_SMALL: (self.q_posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
+                # ClusteredModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
+                #      (sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2, np.log(sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2)),
+                # CHECK - HANDLE t==0 CASE PROPERLY
+                ClusteredModelVarType.FIXED_LARGE: (_boradcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _boradcast_tensor(sigma_bar_y_tm1 ** 2, x.shape), th.log(_boradcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _boradcast_tensor(sigma_bar_y_tm1 ** 2, x.shape))),
+                ClusteredModelVarType.FIXED_SMALL: (self.q_posterior_variance(x, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
             }[self.model_var_type]
         else:
             raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
@@ -296,6 +299,7 @@ class ClusteredGaussianDiffusion:
         sigma_bar_y_tp1=None,
         clip_denoised=True,
         denoised_fn=None,
+        # CHECK - REMOVED THE CONDITION FUNCTION HERE, SINCE WE WANT TO COMPARE WITHOUT THIS GUIDANCE?
         model_kwargs=None,
     ):
         out = self.p_mean_variance(
@@ -371,13 +375,21 @@ class ClusteredGaussianDiffusion:
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
+            # CHECK - y SHOULD BE PART OF THE INPUT. FIX THIS.
+            y = {'y': th.tensor([0] * shape[0], device=device)}
             with th.no_grad():
-                guidance_model = model.guidance_model
+                guidance_model = model.module.guidance_model # CHECK - IF model.module WORKS IN THE SAMPLING SCRIPT
                 mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
                 mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
-                mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t == 0) else (None, None)
+                mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
+                t_is_zero = (t == 0)
+                if t_is_zero.any():
+                    t_incremented = th.where(t_is_zero, t+1, t)
+                    # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0
+                    # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
+                    mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t_incremented)
                 out = self.p_sample(
-                    model.denoise_model,
+                    model, # PASSING WHOLE MODEL HERE, AND WILL PICK DENOISE MODEL INSIDE
                     img,
                     t,
                     mu_bar_y_t,
@@ -433,14 +445,22 @@ class ClusteredGaussianDiffusion:
         # CHECK - _boradcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
         mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
         mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
-        mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t == 0) else (None, None)
+        mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
+        t_is_zero = (t == 0)
+        # CHECK - ISSUE WITH THIS, t+1 MIGHT GO OUT OF BOUNDS IN THIS CASE, SINCE NOT ALL ARE 0's, SOME MIGHT BE THE LAST ELEMENT
+        if t_is_zero.any():
+            t_incremented = th.where(t_is_zero, t+1, t)
+            # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0
+            # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
+            mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t_incremented)
+        # mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t_is_zero.any()) else (None, None)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
         terms["guidance_loss"] = 0.0
 
         x_t = self.q_sample(x_start, t, mu_bar_y_t, sigma_bar_y_t, noise)
-        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
+        if self.denoise_loss_type == ClusteredDenoiseLossType.KL or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_KL:
             terms["denoise_loss"] = self._vb_terms_bpd(
                 model=model,
                 x_start=x_start,
@@ -454,9 +474,9 @@ class ClusteredGaussianDiffusion:
                 clip_denoised=False,
                 model_kwargs=model_kwargs,
             )["output"]
-            if self.loss_type == LossType.RESCALED_KL:
+            if self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_KL:
                 terms["denoise_loss"] *= self.num_timesteps
-        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
+        elif self.denoise_loss_type == ClusteredDenoiseLossType.MSE or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_MSE:
             # CHECK - ARGUMENTS FOR THE DENOISE MODEL, NEED Y, AND BETTER IT NOT BE PART OF MODEL_KWARGS
             model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
 

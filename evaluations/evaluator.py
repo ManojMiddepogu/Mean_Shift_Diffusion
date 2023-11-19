@@ -90,6 +90,10 @@ class FIDStatistics:
         ), f"Training and test covariances have different dimensions: {sigma1.shape}, {sigma2.shape}"
 
         diff = mu1 - mu2
+
+        # # product might be almost singular
+        # covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+
         print(f"Diff Norm: {linalg.norm(diff)}, Covariance Norm: {linalg.norm(sigma1-sigma2)}")
         # product might be almost singular
         covmean = linalg.fractional_matrix_power(sigma1.dot(sigma1), 0.5)

@@ -249,6 +249,7 @@ class TrainLoop:
                 for k, v in cond.items()
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
+            # CHECK - FOR CLUSTERED DIFFUSION, SAMPLE THE SAME T?
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
             compute_losses = functools.partial(
@@ -256,7 +257,9 @@ class TrainLoop:
                 self.ddp_model,
                 micro,
                 t,
-                model_kwargs=micro_cond,
+                micro_cond, # CHECK - THIS WILL BREAK BASELINE TRAINING, THINK OF A WAY TO FIX THIS
+                # model_kwargs=micro_cond,
+                model_kwargs={}, # CHECK - SETTING MODEL_KWARGS TO {} SO ITS NOT CLASS CONDITIONAL
             )
 
             if last_batch or not self.use_ddp:
@@ -271,9 +274,16 @@ class TrainLoop:
                 )
 
             loss = (losses["loss"] * weights).mean()
-            log_loss_dict(
+            logged_data = log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
+            if dist.get_rank() == 0:
+                step_values = {
+                    "step": self.step + self.resume_step,
+                    "samples": (self.step + self.resume_step + 1) * self.global_batch
+                }
+                wandb_log_data = {**step_values, **logged_data}
+                wandb.log(wandb_log_data)
             self.mp_trainer.backward(loss)
 
     def _update_ema(self):
@@ -291,8 +301,6 @@ class TrainLoop:
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
-        if dist.get_rank() == 0:
-            wandb.log({"step": self.step + self.resume_step, "samples": (self.step + self.resume_step + 1) * self.global_batch})
 
     def save(self):
         def save_checkpoint(rate, params):
@@ -367,7 +375,5 @@ def log_loss_dict(diffusion, ts, losses):
         for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
             quartile = int(4 * sub_t / diffusion.num_timesteps)
             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
-            logged_data[f"{key}_q{quartile}"] = sub_loss
 
-    if dist.get_rank() == 0:    
-        wandb.log(logged_data)
+    return logged_data

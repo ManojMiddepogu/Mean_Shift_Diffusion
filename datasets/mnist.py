@@ -3,6 +3,7 @@ import torchvision
 from torchvision import datasets, transforms
 from PIL import Image
 import torch
+import numpy as np
 
 # Set the path where you want to download MNIST dataset
 data_dir = "/scratch/crg9968/datasets/mnist/"
@@ -39,6 +40,35 @@ def save_images(dataset, subfolder):
         img = transforms.ToPILImage()(img_tensor)
         img.save(img_path)
 
+def generate_npz_file(dataset, npz_filename):
+    images = []
+    labels = []
+
+    for i, (img_tensor, label) in enumerate(dataset):
+        # if i >= 1000:
+            # break
+        # Convert tensor to numpy and append to list
+        img_tensor = img_tensor.repeat(3, 1, 1)
+        # NOTE HERE THE TRANFORM APPLIES GIVES IMAGE IN [0,1] RANGE, SO NO (SAMPLE + 1)
+        sample = ((img_tensor) * 127.5).clamp(0, 255).to(torch.uint8)
+        sample = sample.permute(1, 2, 0)
+        sample = sample.contiguous()
+
+        images.append(sample)
+        labels.append(label)
+
+    # Convert lists to numpy arrays
+    images = np.array(images)
+    print(images.shape)
+    labels = np.array(labels)
+
+    # Save the arrays to an NPZ file
+    np.savez(npz_filename, arr_0=images, label_arr_0=labels)
+    print(f"Data saved to {npz_filename}")
+
 # Save training and testing images
-save_images(train_dataset, "train")
-save_images(test_dataset, "test")
+# save_images(train_dataset, "train")
+# save_images(test_dataset, "test")
+
+# Generate NPZ file for training data
+generate_npz_file(train_dataset, os.path.join(data_dir, "mnist_train_reference.npz"))

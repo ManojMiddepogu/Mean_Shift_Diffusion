@@ -2,8 +2,10 @@ import argparse
 import inspect
 
 from . import gaussian_diffusion as gd
-from .respace import SpacedDiffusion, space_timesteps
+from . import clustered_gaussian_diffusion as cgd
+from .respace import SpacedDiffusion, SpacedClusteredDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
+from .test_model import TestModel
 
 # NUM_CLASSES = 1000
 NUM_CLASSES = 10
@@ -63,6 +65,46 @@ def model_and_diffusion_defaults():
         use_new_attention_order=False,
     )
     res.update(diffusion_defaults())
+    return res
+
+def clustered_diffusion_defaults():
+    """
+    Defaults for image and classifier training.
+    """
+    return dict(
+        learn_sigma=False, # CHECK - HAS TO BE FALSE, TRUE NOT SUPPORTED
+        sigma_small=True,
+        diffusion_steps=1000,
+        noise_schedule="linear",
+        timestep_respacing="",
+        guidance_loss_type="JS", # "JS", "WD"
+        denoise_loss_type="MSE", # "MSE", "ReMSE", "KL", "ReKL"
+        predict_xstart=False, # CHECK - HAS TO BE FALSE, TRUE NOT SUPPORTED
+        rescale_timesteps=False,
+    )
+
+def clustered_model_and_diffusion_defaults():
+    """
+    Defaults for image training.
+    """
+    res = dict(
+        image_size=32,
+        num_channels=64,
+        num_res_blocks=2,
+        num_heads=4,
+        num_heads_upsample=-1,
+        num_head_channels=-1,
+        attention_resolutions="16,8",
+        channel_mult="",
+        dropout=0.0,
+        class_cond=False,
+        use_checkpoint=False,
+        use_scale_shift_norm=True,
+        resblock_updown=False,
+        use_fp16=False,
+        use_new_attention_order=False,
+    )
+    res.update(clustered_diffusion_defaults())
     return res
 
 
@@ -127,7 +169,6 @@ def create_model_and_diffusion(
     )
     return model, diffusion
 
-
 def create_model(
     image_size,
     num_channels,
@@ -171,6 +212,127 @@ def create_model(
         in_channels=3,
         model_channels=num_channels,
         out_channels=(3 if not learn_sigma else 6),
+        num_res_blocks=num_res_blocks,
+        attention_resolutions=tuple(attention_ds),
+        dropout=dropout,
+        channel_mult=channel_mult,
+        num_classes=(NUM_CLASSES if class_cond else None),
+        use_checkpoint=use_checkpoint,
+        use_fp16=use_fp16,
+        num_heads=num_heads,
+        num_head_channels=num_head_channels,
+        num_heads_upsample=num_heads_upsample,
+        use_scale_shift_norm=use_scale_shift_norm,
+        resblock_updown=resblock_updown,
+        use_new_attention_order=use_new_attention_order,
+    )
+
+def create_clustered_model_and_diffusion(
+    image_size,
+    class_cond,
+    learn_sigma,
+    sigma_small,
+    num_channels,
+    num_res_blocks,
+    channel_mult,
+    num_heads,
+    num_head_channels,
+    num_heads_upsample,
+    attention_resolutions,
+    dropout,
+    diffusion_steps,
+    noise_schedule,
+    guidance_loss_type,
+    denoise_loss_type,
+    timestep_respacing,
+    predict_xstart,
+    rescale_timesteps,
+    use_checkpoint,
+    use_scale_shift_norm,
+    resblock_updown,
+    use_fp16,
+    use_new_attention_order
+):
+    model = create_clustered_model(
+        image_size,
+        num_channels,
+        num_res_blocks,
+        channel_mult=channel_mult,
+        learn_sigma=learn_sigma,
+        class_cond=class_cond,
+        use_checkpoint=use_checkpoint,
+        attention_resolutions=attention_resolutions,
+        num_heads=num_heads,
+        num_head_channels=num_head_channels,
+        num_heads_upsample=num_heads_upsample,
+        use_scale_shift_norm=use_scale_shift_norm,
+        dropout=dropout,
+        resblock_updown=resblock_updown,
+        use_fp16=use_fp16,
+        use_new_attention_order=use_new_attention_order
+    )
+    diffusion = create_clustered_gaussian_diffusion(
+        steps=diffusion_steps,
+        learn_sigma=learn_sigma,
+        sigma_small=sigma_small,
+        noise_schedule=noise_schedule,
+        guidance_loss_type=guidance_loss_type,
+        denoise_loss_type=denoise_loss_type,
+        predict_xstart=predict_xstart,
+        rescale_timesteps=rescale_timesteps,
+        timestep_respacing=timestep_respacing,
+    )
+    return model, diffusion
+
+def create_clustered_model(
+    image_size,
+    num_channels,
+    num_res_blocks,
+    channel_mult="",
+    learn_sigma=False,
+    class_cond=False, # CHECK - HOW IS THIS HANDLED?
+    use_checkpoint=False,
+    attention_resolutions="16",
+    num_heads=1,
+    num_head_channels=-1,
+    num_heads_upsample=-1,
+    use_scale_shift_norm=False,
+    dropout=0,
+    resblock_updown=False,
+    use_fp16=False,
+    use_new_attention_order=False
+):
+    if learn_sigma:
+        raise NotImplementedError(f"learning sigma not implemented!")
+    
+    if class_cond:
+        raise NotImplementedError(f"Class condition not implemented!")
+
+    if channel_mult == "":
+        if image_size == 512:
+            channel_mult = (0.5, 1, 1, 2, 2, 4, 4)
+        elif image_size == 256:
+            channel_mult = (1, 1, 2, 2, 4, 4)
+        elif image_size == 128:
+            channel_mult = (1, 1, 2, 3, 4)
+        elif image_size == 64:
+            channel_mult = (1, 2, 3, 4)
+        elif image_size == 32:
+            channel_mult = (1, 2, 4)
+        else:
+            raise ValueError(f"unsupported image size: {image_size}")
+    else:
+        channel_mult = tuple(int(ch_mult) for ch_mult in channel_mult.split(","))
+
+    attention_ds = []
+    for res in attention_resolutions.split(","):
+        attention_ds.append(image_size // int(res))
+
+    return TestModel(
+        image_size=image_size,
+        in_channels=3,
+        model_channels=num_channels,
+        out_channels=3,
         num_res_blocks=num_res_blocks,
         attention_resolutions=tuple(attention_ds),
         dropout=dropout,
@@ -246,6 +408,8 @@ def create_classifier(
         channel_mult = (1, 1, 2, 3, 4)
     elif image_size == 64:
         channel_mult = (1, 2, 3, 4)
+    elif image_size == 32:
+        channel_mult = (1, 2, 4)
     else:
         raise ValueError(f"unsupported image size: {image_size}")
 
@@ -426,6 +590,56 @@ def create_gaussian_diffusion(
         rescale_timesteps=rescale_timesteps,
     )
 
+def create_clustered_gaussian_diffusion(
+    *,
+    steps=1000,
+    learn_sigma=False,
+    sigma_small=True,
+    noise_schedule="linear",
+    guidance_loss_type="JS", # "JS", "WD"
+    denoise_loss_type="MSE", # "MSE", "ReMSE", "KL", "ReKL"
+    predict_xstart=False,
+    rescale_timesteps=False,
+    timestep_respacing="",
+):
+    if predict_xstart:
+        raise NotImplementedError(f"Predicting x0 not implemented!")
+    
+    if learn_sigma:
+        raise NotImplementedError(f"learning sigma not implemented!")
+
+    betas = cgd.get_named_beta_schedule(noise_schedule, steps)
+
+    if guidance_loss_type == "JS":
+        guidance_loss_type = cgd.ClusteredGuidanceLossType.JS
+    elif guidance_loss_type == "WD":
+        guidance_loss_type = cgd.ClusteredGuidanceLossType.WD
+    else:
+        raise NotImplementedError(f"Guidance Loss Type {guidance_loss_type} not implemented!")
+    
+    if denoise_loss_type == "MSE":
+        denoise_loss_type = cgd.ClusteredDenoiseLossType.MSE
+    elif denoise_loss_type == "ReMSE":
+        denoise_loss_type = cgd.ClusteredDenoiseLossType.RESCALED_MSE
+    elif denoise_loss_type == "KL":
+        denoise_loss_type = cgd.ClusteredDenoiseLossType.KL
+    elif denoise_loss_type == "ReKL":
+        denoise_loss_type = cgd.ClusteredDenoiseLossType.RESCALED_KL
+    else:
+        raise NotImplementedError(f"Denoise Loss Type {denoise_loss_type} not implemented!")
+
+    if not timestep_respacing:
+        timestep_respacing = [steps]
+
+    return SpacedClusteredDiffusion(
+        use_timesteps=space_timesteps(steps, timestep_respacing),
+        betas=betas,
+        model_mean_type=cgd.ClusteredModelMeanType.EPSILON,
+        model_var_type=cgd.ClusteredModelVarType.FIXED_SMALL if sigma_small else cgd.ClusteredModelVarType.FIXED_LARGE,
+        guidance_loss_type=guidance_loss_type,
+        denoise_loss_type=denoise_loss_type,
+        rescale_timesteps=rescale_timesteps,
+    )
 
 def add_dict_to_argparser(parser, default_dict):
     for k, v in default_dict.items():
