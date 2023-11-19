@@ -4,6 +4,7 @@ Train a noised image classifier on ImageNet.
 
 import argparse
 import os
+import wandb
 
 import blobfile as bf
 import torch as th
@@ -30,6 +31,10 @@ def main():
 
     dist_util.setup_dist()
     logger.configure()
+    wandb.init(
+		entity = "llvm",
+		config = args,
+	)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_classifier_and_diffusion(
@@ -101,7 +106,7 @@ def main():
 
     logger.log("training classifier model...")
 
-    def forward_backward_log(data_loader, prefix="train"):
+    def forward_backward_log(data_loader, step, prefix="train"):
         batch, extra = next(data_loader)
         labels = extra["y"].to(dist_util.dev())
 
@@ -127,7 +132,10 @@ def main():
             losses[f"{prefix}_acc@5"] = compute_top_k(
                 logits, sub_labels, k=5, reduction="none"
             )
-            log_loss_dict(diffusion, sub_t, losses)
+            logged_data = log_loss_dict(diffusion, sub_t, losses)
+            if dist.get_rank() == 0:
+                step_values = {"step": step}
+                wandb.log({**step_values, **logged_data})
             del losses
             loss = loss.mean()
             if loss.requires_grad:
@@ -143,13 +151,13 @@ def main():
         )
         if args.anneal_lr:
             set_annealed_lr(opt, args.lr, (step + resume_step) / args.iterations)
-        forward_backward_log(data)
+        forward_backward_log(data, step + resume_step)
         mp_trainer.optimize(opt)
         if val_data is not None and not step % args.eval_interval:
             with th.no_grad():
                 with model.no_sync():
                     model.eval()
-                    forward_backward_log(val_data, prefix="val")
+                    forward_backward_log(val_data, step + resume_step, prefix="val")
                     model.train()
         if not step % args.log_interval:
             logger.dumpkvs()
@@ -165,6 +173,8 @@ def main():
         logger.log("saving model...")
         save_model(mp_trainer, opt, step + resume_step)
     dist.barrier()
+    
+    wandb.finish()
 
 
 def set_annealed_lr(opt, base_lr, frac_done):

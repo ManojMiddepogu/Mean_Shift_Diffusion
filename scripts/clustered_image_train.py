@@ -9,8 +9,8 @@ from guided_diffusion import dist_util, logger
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion.resample import create_named_schedule_sampler
 from guided_diffusion.script_util import (
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
+    clustered_model_and_diffusion_defaults,
+    create_clustered_model_and_diffusion,
     args_to_dict,
     add_dict_to_argparser,
 )
@@ -28,8 +28,8 @@ def main():
 	)
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
+    model, diffusion = create_clustered_model_and_diffusion(
+        **args_to_dict(args, clustered_model_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
@@ -39,7 +39,8 @@ def main():
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         image_size=args.image_size,
-        class_cond=args.class_cond,
+        class_cond=True, # CHECK - THIS IS JUST TO LOAD THE LABELS
+        # class_cond=args.class_cond,
         random_crop=args.random_crop,
         random_flip=args.random_flip,
     )
@@ -95,7 +96,7 @@ def create_argparser():
         num_samples_visualize=25,
         use_ddim=False,
     ))
-    defaults.update(model_and_diffusion_defaults())
+    defaults.update(clustered_model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser

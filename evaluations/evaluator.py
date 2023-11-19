@@ -92,8 +92,12 @@ class FIDStatistics:
 
         diff = mu1 - mu2
 
+        # # product might be almost singular
+        # covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+
+        print(f"Diff Norm: {linalg.norm(diff)}, Covariance Norm: {linalg.norm(sigma1-sigma2)}")
         # product might be almost singular
-        covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+        covmean = linalg.fractional_matrix_power(sigma1.dot(sigma1), 0.5)
         if not np.isfinite(covmean).all():
             msg = (
                 "fid calculation produces singular product; adding %s to diagonal of cov estimates"

@@ -15,7 +15,7 @@
 singularity exec --bind /scratch --nv --overlay /scratch/crg9968/llvm/overlay-25GB-500K.ext3:ro /scratch/crg9968/llvm/cuda11.7.99-cudnn8.5-devel-ubuntu22.04.2.sif /bin/bash -c "
 source /ext3/env.sh
 cd /scratch/crg9968/llvm/Clustered_Diffusion
-conda activate venv
+conda activate diffusion
 
 OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run GPUS_PER_NODE=2 \
 python3 scripts/image_train.py --data_dir /scratch/crg9968/datasets/mnist/train --image_size 32 --num_channels 64 \
