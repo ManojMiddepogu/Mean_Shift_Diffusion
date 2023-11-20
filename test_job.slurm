@@ -17,9 +17,10 @@ source /ext3/env.sh
 cd /scratch/crg9968/llvm/Clustered_Diffusion
 conda activate diffusion
 
-OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run GPUS_PER_NODE=1 \
-python3 scripts/image_train.py --data_dir /scratch/crg9968/datasets/mnist/train --image_size 32 --num_channels 64 \
- --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 --batch_size 128 --lr_anneal_steps 5 \
- --save_interval 1000 --diffusion_steps 1000 --noise_schedule linear \
+OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run_baseline GPUS_PER_NODE=1 \
+python3 scripts/image_train.py --data_dir /scratch/crg9968/datasets/mnist/train \
+ --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 \
+ --sigma_small True --diffusion_steps 1000 --noise_schedule linear \
+ --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 5 --save_interval 1000 \
  --clip_denoised True --num_samples_visualize 36 --use_ddim False
 "

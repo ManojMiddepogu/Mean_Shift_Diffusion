@@ -3,6 +3,7 @@ import torch as th
 
 from .gaussian_diffusion import GaussianDiffusion
 from .clustered_gaussian_diffusion import ClusteredGaussianDiffusion
+from .test_model import TestModel
 
 
 def space_timesteps(num_timesteps, section_counts):
@@ -177,8 +178,12 @@ class _WrappedModel:
 class _WrappedClusteredModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         # Using model.module since its wrapped in DDP
-        self.guidance_model = _WrappedGuidanceModel(model.module.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
-        self.denoise_model = _WrappedModel(model.module.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
+        if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+            self.guidance_model = _WrappedGuidanceModel(model.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
+            self.denoise_model = _WrappedModel(model.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
+        else: # HAS TO BE DDP
+            self.guidance_model = _WrappedGuidanceModel(model.module.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
+            self.denoise_model = _WrappedModel(model.module.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
 
     def __call__(self, x, ts, **kwargs):
         raise NotImplementedError(f"THIS SHOULD NOT BE CALLED!")

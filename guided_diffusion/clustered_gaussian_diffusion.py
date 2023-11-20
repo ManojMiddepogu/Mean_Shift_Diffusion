@@ -6,6 +6,7 @@ import torch as th
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
+from .test_model import TestModel
 
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
@@ -127,6 +128,7 @@ class ClusteredGaussianDiffusion:
         self.num_timesteps = int(betas.shape[0])
 
         self.alphas = 1.0 - betas
+        self.alphas_next = np.append(self.alphas[1:], 0.0)
         self.sqrt_alphas = np.sqrt(self.alphas)
         self.alphas_cumprod = np.cumprod(self.alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
@@ -137,16 +139,26 @@ class ClusteredGaussianDiffusion:
         # calculations for diffusion q(x_t | x_{t-1}) and others
         self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod)
         self.sqrt_one_minus_alphas_cumprod = np.sqrt(1.0 - self.alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod_prev = np.sqrt(1.0 - np.append(1.0, self.alphas_cumprod[:-1]))
+        self.sqrt_one_minus_alphas_cumprod_next = np.sqrt(1.0 - np.append(self.alphas_cumprod[1:], 0.0))
         self.log_one_minus_alphas_cumprod = np.log(1.0 - self.alphas_cumprod)
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
+
+        # self.test_print = True
 
     def q_mean_variance(self, x_start, t, mu_bar_y_t, sigma_bar_y_t):
         mean = (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
         ) + mu_bar_y_t
         # CHECK - IS THIS VARIANCE CORRECT? SHOULDN'T THIS BE DIAGONAL?
-        variance = _boradcast_tensor(sigma_bar_y_t ** 2, x_start.shape)
+        # variance = _broadcast_tensor(sigma_bar_y_t ** 2, x_start.shape)
+        # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+        variance = _broadcast_tensor_test_baseline(sigma_bar_y_t ** 2, x_start.shape, self.sqrt_one_minus_alphas_cumprod ** 2, t)
+        # if self.test_print:
+            # self.test_print = False
+            # print(t)
+            # print(variance)
         log_variance = th.log(variance)
         return mean, variance, log_variance
     
@@ -157,14 +169,21 @@ class ClusteredGaussianDiffusion:
         return (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + mu_bar_y_t
-            + _boradcast_tensor(sigma_bar_y_t, x_start.shape) * noise
+            # + _broadcast_tensor(sigma_bar_y_t, x_start.shape) * noise
+            # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+            + _broadcast_tensor_test_baseline(sigma_bar_y_t, x_start.shape, self.sqrt_one_minus_alphas_cumprod, t) * noise
         )
     
-    def posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1):
-        return _boradcast_tensor(sigma_bar_y_tm1 ** 2, x_t.shape) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * _boradcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape))
+    # def posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1):
+    #     return _broadcast_tensor(sigma_bar_y_tm1 ** 2, x_t.shape) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * _broadcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape))
+    # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+    def posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sqrt_y_t, sqrt_y_tm1):
+        return _broadcast_tensor_test_baseline(sigma_bar_y_tm1 ** 2, x_t.shape, sqrt_y_tm1 ** 2, t) * (1 - _extract_into_tensor(self.alphas, t, x_t.shape) * _broadcast_tensor_test_baseline((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape, (sqrt_y_tm1 / sqrt_y_t) ** 2, t))
     
     def q_posterior_variance(self, x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1 = None):
-        posterior_variance = self.posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1)
+        # posterior_variance = self.posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1)
+        # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+        posterior_variance = self.posterior_variance(x_t, t, sigma_bar_y_t, sigma_bar_y_tm1, self.sqrt_one_minus_alphas_cumprod, self.sqrt_one_minus_alphas_cumprod_prev)
 
         t_is_zero = (t == 0)
         # Make sure that `sigma_bar_y_tp1` is provided when it's needed
@@ -173,8 +192,14 @@ class ClusteredGaussianDiffusion:
 
         # Compute the log variance for t+1 where t is 0
         if t_is_zero.any():
+            # posterior_log_variance_t_plus_1 = th.log(
+            #     self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero])
+            # )
+            # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
             posterior_log_variance_t_plus_1 = th.log(
-                self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero])
+                # self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero], self.sqrt_one_minus_alphas_cumprod_next, self.sqrt_one_minus_alphas_cumprod)
+                # CHECK - THE ABOVE THING IS WRONG, SINVE I AM PASSING T+1, THE ALPHA STUFF SHOULD BE .,-1 INSTEAD OF +1,.
+                self.posterior_variance(x_t[t_is_zero], t[t_is_zero] + 1, sigma_bar_y_tp1[t_is_zero], sigma_bar_y_t[t_is_zero], self.sqrt_one_minus_alphas_cumprod, self.sqrt_one_minus_alphas_cumprod_prev)
             )
         
         # Prepare a tensor for the log variance clipped with the same shape as posterior_variance
@@ -202,7 +227,9 @@ class ClusteredGaussianDiffusion:
             + mu_bar_y_tm1
             + (
                 _extract_into_tensor(self.sqrt_alphas, t, x_t.shape)
-                * _boradcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t), x_t.shape)
+                # * _broadcast_tensor((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape)
+                # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+                * _broadcast_tensor_test_baseline((sigma_bar_y_tm1 / sigma_bar_y_t) ** 2, x_t.shape, (self.sqrt_one_minus_alphas_cumprod_prev/self.sqrt_one_minus_alphas_cumprod)**2, t)
                 * (x_t - _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * x_start - mu_bar_y_t)
             )
         )
@@ -235,8 +262,8 @@ class ClusteredGaussianDiffusion:
                 # CHECK - THIS IS INCORRECT, t IS FOR A BATCH NOT A SINGLE ELEMENT. MAKE CHANGES ACCORDING TO q_posterior_variance()
                 # ClusteredModelVarType.FIXED_LARGE: (self.q_posterior_variance(x_t, t+1, sigma_bar_y_tp1, sigma_bar_y_t, None)) if (t == 0) else \
                 #      (sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2, np.log(sigma_bar_y_t ** 2 - _extract_into_tensor(self.alphas, t, x_t) * sigma_bar_y_tm1 ** 2)),
-                # CHECK - HANDLE t==0 CASE PROPERLY
-                ClusteredModelVarType.FIXED_LARGE: (_boradcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _boradcast_tensor(sigma_bar_y_tm1 ** 2, x.shape), th.log(_boradcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _boradcast_tensor(sigma_bar_y_tm1 ** 2, x.shape))),
+                # CHECK - HANDLE t==0 CASE PROPERLY THIS IS COMPLETELY WRONG FOR FIXED_LARGE. I CAN TORALLY IGNORE THIS AND SAY NOT IMPLEMENTED
+                ClusteredModelVarType.FIXED_LARGE: (_broadcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _broadcast_tensor(sigma_bar_y_tm1 ** 2, x.shape), th.log(_broadcast_tensor(sigma_bar_y_t ** 2, x.shape) - _extract_into_tensor(self.alphas, t, x.shape) * _broadcast_tensor(sigma_bar_y_tm1 ** 2, x.shape))),
                 ClusteredModelVarType.FIXED_SMALL: (self.q_posterior_variance(x, t, sigma_bar_y_t, sigma_bar_y_tm1, sigma_bar_y_tp1)),
             }[self.model_var_type]
         else:
@@ -274,12 +301,16 @@ class ClusteredGaussianDiffusion:
             x_t
             - _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape) * pred_xstart
             - mu_bar_y_t
-        ) / _boradcast_tensor(sigma_bar_y_t, x_t.shape)
+        # ) / _broadcast_tensor(sigma_bar_y_t, x_t.shape)
+        # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+        ) / _broadcast_tensor_test_baseline(sigma_bar_y_t, x_t.shape, self.sqrt_one_minus_alphas_cumprod, t)
 
     def _predict_xstart_from_eps(self, x_t, t, eps, mu_bar_y_t, sigma_bar_y_t):
         assert x_t.shape == eps.shape
         return (
-            (x_t - mu_bar_y_t - _boradcast_tensor(sigma_bar_y_t, x_t.shape) * eps) / _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape)
+            # (x_t - mu_bar_y_t - _broadcast_tensor(sigma_bar_y_t, x_t.shape) * eps) * _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape)
+            # CHECK - TESTING FOR THE BASELINE CASE OF (0, 1)
+            (x_t - mu_bar_y_t - _broadcast_tensor_test_baseline(sigma_bar_y_t, x_t.shape, self.sqrt_one_minus_alphas_cumprod, t) * eps) * _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape)
         )
 
     def _scale_timesteps(self, t):
@@ -378,7 +409,10 @@ class ClusteredGaussianDiffusion:
             # CHECK - y SHOULD BE PART OF THE INPUT. FIX THIS.
             y = {'y': th.tensor([0] * shape[0], device=device)}
             with th.no_grad():
-                guidance_model = model.module.guidance_model # CHECK - IF model.module WORKS IN THE SAMPLING SCRIPT
+                if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+                    guidance_model = model.guidance_model
+                else:
+                    guidance_model = model.module.guidance_model # CHECK - IF model.module WORKS IN THE SAMPLING SCRIPT
                 mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
                 mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
                 mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
@@ -442,7 +476,7 @@ class ClusteredGaussianDiffusion:
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
 
-        # CHECK - _boradcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
+        # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
         mu_bar_y_t, sigma_bar_y_t = guidance_model(y, t)
         mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(y, t-1)
         mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
@@ -450,7 +484,7 @@ class ClusteredGaussianDiffusion:
         # CHECK - ISSUE WITH THIS, t+1 MIGHT GO OUT OF BOUNDS IN THIS CASE, SINCE NOT ALL ARE 0's, SOME MIGHT BE THE LAST ELEMENT
         if t_is_zero.any():
             t_incremented = th.where(t_is_zero, t+1, t)
-            # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0
+            # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0 IN q_posterior_variance
             # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
             mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t_incremented)
         # mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(y, t+1) if (t_is_zero.any()) else (None, None)
@@ -519,7 +553,20 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
     return res.expand(broadcast_shape)
 
 
-def _boradcast_tensor(t, broadcast_shape):
+def _broadcast_tensor(t, broadcast_shape):
+    while len(t.shape) < len(broadcast_shape):
+        t = t[..., None]
+    return t.expand(broadcast_shape)
+
+
+def _broadcast_tensor_test_baseline(t, broadcast_shape, arr, timesteps):
+    # print(t.shape)
+    # print(broadcast_shape)
+    # print(arr.shape)
+    # print(timesteps.shape)
+    res = th.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
+    # print(res.shape)
+    t = t * res.unsqueeze(-1)
     while len(t.shape) < len(broadcast_shape):
         t = t[..., None]
     return t.expand(broadcast_shape)
