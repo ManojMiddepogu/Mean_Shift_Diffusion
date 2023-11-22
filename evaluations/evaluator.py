@@ -50,7 +50,6 @@ def main():
     sample_acts = evaluator.read_activations(args.sample_batch)
     print("computing/reading sample batch statistics...")
     sample_stats, sample_stats_spatial = evaluator.read_statistics(args.sample_batch, sample_acts)
-
     print("Computing evaluations...")
     print("Inception Score:", evaluator.compute_inception_score(sample_acts[0]))
     print("FID:", sample_stats.frechet_distance(ref_stats))
@@ -91,9 +90,9 @@ class FIDStatistics:
         ), f"Training and test covariances have different dimensions: {sigma1.shape}, {sigma2.shape}"
 
         diff = mu1 - mu2
-
+        print(f"Diff Norm: {linalg.norm(diff)}, Covariance Norm: {linalg.norm(sigma1-sigma2)}")
         # product might be almost singular
-        covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+        covmean = linalg.fractional_matrix_power(sigma1.dot(sigma1), 0.5)
         if not np.isfinite(covmean).all():
             msg = (
                 "fid calculation produces singular product; adding %s to diagonal of cov estimates"
@@ -340,8 +339,8 @@ class ManifoldEstimator:
                  - precision: an np.ndarray of length K1
                  - recall: an np.ndarray of length K2
         """
-        features_1_status = np.zeros([len(features_1), radii_2.shape[1]], dtype=np.bool)
-        features_2_status = np.zeros([len(features_2), radii_1.shape[1]], dtype=np.bool)
+        features_1_status = np.zeros([len(features_1), radii_2.shape[1]], dtype=bool)
+        features_2_status = np.zeros([len(features_2), radii_1.shape[1]], dtype=bool)
         for begin_1 in range(0, len(features_1), self.row_batch_size):
             end_1 = begin_1 + self.row_batch_size
             batch_1 = features_1[begin_1:end_1]
