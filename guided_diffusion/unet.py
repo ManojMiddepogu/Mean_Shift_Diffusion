@@ -72,7 +72,7 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     def forward(self, x, emb):
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(x, emb)
+                x = layer(x, emb)   
             else:
                 x = layer(x)
         return x
@@ -142,7 +142,7 @@ class Downsample(nn.Module):
 
 class ResBlock(TimestepBlock):
     """
-    A residual block that can optionally change the number of channels.
+    A residual block that can optionally change the number of channels. Does the upsampling or downsampling of dimension.
 
     :param channels: the number of input channels.
     :param emb_channels: the number of timestep embedding channels.
@@ -298,10 +298,10 @@ class AttentionBlock(nn.Module):
 
     def _forward(self, x):
         b, c, *spatial = x.shape
-        x = x.reshape(b, c, -1)
-        qkv = self.qkv(self.norm(x))
-        h = self.attention(qkv)
-        h = self.proj_out(h)
+        x = x.reshape(b, c, -1) # (b,c,h*w)
+        qkv = self.qkv(self.norm(x)) # (b,3*c,h*w)
+        h = self.attention(qkv) #(b,c,h*w)
+        h = self.proj_out(h) #(b,c,h*w)
         return (x + h).reshape(b, c, *spatial)
 
 
@@ -377,12 +377,12 @@ class QKVAttention(nn.Module):
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
-        q, k, v = qkv.chunk(3, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
+        q, k, v = qkv.chunk(3, dim=1) # (N,(C),T)
+        scale = 1 / math.sqrt(math.sqrt(ch)) 
         weight = th.einsum(
             "bct,bcs->bts",
-            (q * scale).view(bs * self.n_heads, ch, length),
-            (k * scale).view(bs * self.n_heads, ch, length),
+            (q * scale).view(bs * self.n_heads, ch, length), # (N*H,C,T)
+            (k * scale).view(bs * self.n_heads, ch, length), # (N*H,C,T)
         )  # More stable with f16 than dividing afterwards
         weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
         a = th.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
