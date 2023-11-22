@@ -2,6 +2,8 @@ import numpy as np
 import torch as th
 
 from .gaussian_diffusion import GaussianDiffusion
+from .clustered_gaussian_diffusion import ClusteredGaussianDiffusion
+from .test_model import TestModel
 
 
 def space_timesteps(num_timesteps, section_counts):
@@ -112,7 +114,53 @@ class SpacedDiffusion(GaussianDiffusion):
         # Scaling is done by the wrapped model.
         return t
 
+class SpacedClusteredDiffusion(ClusteredGaussianDiffusion):
+    """
+    A diffusion process which can skip steps in a base diffusion process.
 
+    :param use_timesteps: a collection (sequence or set) of timesteps from the
+                          original diffusion process to retain.
+    :param kwargs: the kwargs to create the base diffusion process.
+    """
+
+    def __init__(self, use_timesteps, **kwargs):
+        self.use_timesteps = set(use_timesteps)
+        self.timestep_map = []
+        self.original_num_steps = len(kwargs["betas"])
+
+        base_diffusion = ClusteredGaussianDiffusion(**kwargs)  # pylint: disable=missing-kwoa
+        last_alpha_cumprod = 1.0
+        new_betas = []
+        for i, alpha_cumprod in enumerate(base_diffusion.alphas_cumprod):
+            if i in self.use_timesteps:
+                new_betas.append(1 - alpha_cumprod / last_alpha_cumprod)
+                last_alpha_cumprod = alpha_cumprod
+                self.timestep_map.append(i)
+        kwargs["betas"] = np.array(new_betas)
+        super().__init__(**kwargs)
+
+    def p_mean_variance(
+        self, model, *args, **kwargs
+    ):  # pylint: disable=signature-differs
+        return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
+
+    def training_losses(
+        self, model, *args, **kwargs
+    ):  # pylint: disable=signature-differs
+        return super().training_losses(self._wrap_model(model), *args, **kwargs)
+
+    def _wrap_model(self, model):
+        if isinstance(model, _WrappedClusteredModel):
+            return model
+        return _WrappedClusteredModel(
+            model, self.timestep_map, self.rescale_timesteps, self.original_num_steps
+        )
+
+    def _scale_timesteps(self, t):
+        # Scaling is done by the wrapped model.
+        return t
+
+# CHECK WRAPPED MODEL IS CAUSING ISSUES WHEN USING GUIDANCE AND DENOISE MODEL.
 class _WrappedModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         self.model = model
@@ -126,3 +174,30 @@ class _WrappedModel:
         if self.rescale_timesteps:
             new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
         return self.model(x, new_ts, **kwargs)
+
+class _WrappedClusteredModel:
+    def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
+        # Using model.module since its wrapped in DDP
+        if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+            self.guidance_model = _WrappedGuidanceModel(model.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
+            self.denoise_model = _WrappedModel(model.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
+        else: # HAS TO BE DDP
+            self.guidance_model = _WrappedGuidanceModel(model.module.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
+            self.denoise_model = _WrappedModel(model.module.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
+
+    def __call__(self, x, ts, **kwargs):
+        raise NotImplementedError(f"THIS SHOULD NOT BE CALLED!")
+
+class _WrappedGuidanceModel:
+    def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
+        self.model = model
+        self.timestep_map = timestep_map
+        self.rescale_timesteps = rescale_timesteps
+        self.original_num_steps = original_num_steps
+
+    def __call__(self, y, ts, **kwargs):
+        map_tensor = th.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
+        new_ts = map_tensor[ts]
+        if self.rescale_timesteps:
+            new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
+        return self.model(y, new_ts, **kwargs)
