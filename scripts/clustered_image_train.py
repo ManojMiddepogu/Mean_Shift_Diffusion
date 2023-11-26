@@ -22,10 +22,11 @@ def main():
 
     dist_util.setup_dist()
     logger.configure()
-    wandb.init(
-		entity = "llvm",
-		config = args,
-	)
+    if args.use_wandb:
+        wandb.init(
+            entity = "llvm",
+            config = args,
+        )
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_clustered_model_and_diffusion(
@@ -39,8 +40,7 @@ def main():
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         image_size=args.image_size,
-        class_cond=True, # CHECK - THIS IS JUST TO LOAD THE LABELS
-        # class_cond=args.class_cond,
+        class_cond=args.class_cond,
         random_crop=args.random_crop,
         random_flip=args.random_flip,
     )
@@ -67,9 +67,11 @@ def main():
         num_samples_visualize=args.num_samples_visualize,
         use_ddim=args.use_ddim,
         image_size=args.image_size,
+        use_wandb=args.use_wandb,
     ).run_loop()
 
-    wandb.finish()
+    if args.use_wandb:
+        wandb.finish()
 
 
 def create_argparser():
@@ -89,6 +91,7 @@ def create_argparser():
         fp16_scale_growth=1e-3,
         random_crop=False,
         random_flip=False,
+        use_wandb=True,
     )
     # Sampling arguments for visualization during training
     defaults.update(dict(

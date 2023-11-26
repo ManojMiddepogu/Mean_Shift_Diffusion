@@ -14,6 +14,8 @@ def create_named_schedule_sampler(name, diffusion):
     """
     if name == "uniform":
         return UniformSampler(diffusion)
+    elif name == "same-t":
+        return SameTSampler(diffusion)
     elif name == "loss-second-moment":
         return LossSecondMomentResampler(diffusion)
     else:
@@ -65,6 +67,24 @@ class UniformSampler(ScheduleSampler):
 
     def weights(self):
         return self._weights
+
+
+class SameTSampler(ScheduleSampler):
+    def __init__(self, diffusion):
+        self.diffusion = diffusion
+        self._weights = np.ones([diffusion.num_timesteps])
+
+    def weights(self):
+        return self._weights
+    
+    def sample(self, batch_size, device):
+        w = self.weights()
+        p = w / np.sum(w)
+        indices_np = np.random.choice(len(p), size=(1,), p=p)
+        indices = th.full((batch_size,), indices_np[0], dtype=th.long).to(device)
+        weights_np = 1 / (len(p) * p[indices_np])
+        weights = th.full((batch_size,), weights_np[0], dtype=th.float).to(device)
+        return indices, weights
 
 
 class LossAwareSampler(ScheduleSampler):
@@ -129,7 +149,7 @@ class LossSecondMomentResampler(LossAwareSampler):
         self._loss_history = np.zeros(
             [diffusion.num_timesteps, history_per_term], dtype=np.float64
         )
-        self._loss_counts = np.zeros([diffusion.num_timesteps], dtype=np.int)
+        self._loss_counts = np.zeros([diffusion.num_timesteps], dtype=np.int64)
 
     def weights(self):
         if not self._warmed_up():

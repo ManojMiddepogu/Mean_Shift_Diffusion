@@ -74,25 +74,37 @@ class Guidance_Model(nn.Module):
             linear(time_embed_dim, time_embed_dim),
         )
         reshape_embed_dim = model_channels * (image_size ** 2)
-        self.reshape_block = nn.sequential(
-            normalization(time_embed),
+        self.reshape_block = nn.Sequential(
+            # CHECK - ALSO SHOULD WE UPDATE THE NORMALIZATION FROM 32 to 16??
+            normalization(time_embed_dim), # CHECK - IS THIS CORRECT TO USE?? THIS IS NORMALIZING IN GROUPS OF 32
             nn.SiLU(),
-            linear(time_embed, reshape_embed_dim),
+            linear(time_embed_dim, reshape_embed_dim),
         )
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
         
-        final_dim = out_channels*(image_size**2)
         self.proj = nn.Sequential(
-            normalization(final_dim),
+            normalization(self.model_channels),
             nn.SiLU(),
-            nn.conv_nd(dims, model_channels, final_dim, padding = 1),
+            zero_module(conv_nd(dims, self.model_channels, self.out_channels, 3, padding = 1)),
         )
         self.one_minus_sigma = nn.Sequential(
-            normalization(final_dim),
+            normalization(self.model_channels),
             nn.SiLU(),
-            nn.conv_nd(dims, model_channels, 1, kernel_size=(image_size, image_size), padding = 1),
+            zero_module(conv_nd(dims, self.model_channels, 1, image_size, padding = 0)),
         )
+        # CHECK - USE OF NORMALIZATION IS NOT CORRECT. I CHANGED IT TO CHANNELS FOR NOW.
+        # final_dim = out_channels*(image_size**2)
+        # self.proj = nn.Sequential(
+        #     normalization(final_dim),
+        #     nn.SiLU(),
+        #     conv_nd(dims, model_channels, final_dim, 3, padding = 1),
+        # )
+        # self.one_minus_sigma = nn.Sequential(
+        #     normalization(final_dim),
+        #     nn.SiLU(),
+        #     conv_nd(dims, model_channels, 1, kernel_size=(image_size, image_size), padding = 1),
+        # )
 
     def forward(self, timesteps, y=None):    
         """
@@ -105,7 +117,20 @@ class Guidance_Model(nn.Module):
         label = self.label_emb(y) #(N,TE)
         final_emb = emb + label
         reshape_emb = self.reshape_block(final_emb)
-        reshape_emb_image = reshape_emb.view(:,:,image_size,image_size)
+        # reshape_emb_image = reshape_emb.view(:,:,image_size,image_size)
+        reshape_emb_image = reshape_emb.view(-1, self.model_channels, self.image_size, self.image_size)
         mu = self.proj(reshape_emb_image)
         one_minus_sigma = self.one_minus_sigma(reshape_emb_image).squeeze()
-        return mu, 1-one_minus_sigma
+
+        # HANDLING THE BASE CASE HERE ITSELF
+        t_is_less_zero = (timesteps < 0)
+        if t_is_less_zero.any():
+            # Creating zero tensors for mu and sigma where timesteps is 0
+            zero_mu = th.zeros_like(mu)
+            one_sigma = th.ones_like(one_minus_sigma)
+
+            # Replacing the corresponding elements with zeros
+            mu[t_is_less_zero] = zero_mu[t_is_less_zero]
+            one_minus_sigma[t_is_less_zero] = one_sigma[t_is_less_zero]
+
+        return mu, 1 - one_minus_sigma

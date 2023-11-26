@@ -18,7 +18,7 @@ cd /scratch/crg9968/llvm/Clustered_Diffusion
 conda activate diffusion
 
 OPENAI_LOGDIR=/scratch/crg9968/llvm/classifier_train_logs_noise_decay GPUS_PER_NODE=1 \
-python3 scripts/classifier_sample.py --num_samples 100 --plot_samples 100 --batch_size 128 --use_ddim False \
+python3 scripts/classifier_sample.py --num_samples 100 --plot_samples 100 --batch_size 128 --use_ddim False --class_cond True \
  --model_path /scratch/crg9968/llvm/logs_test_run_mnist_first_run/ema_0.9999_030000.pt \
  --classifier_path /scratch/crg9968/llvm/classifier_train_logs_noise_decay/model029999.pt \
  --image_size 32 --num_channels 64 --classifier_width 64 \

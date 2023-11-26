@@ -3,7 +3,8 @@ import torch as th
 
 from .gaussian_diffusion import GaussianDiffusion
 from .clustered_gaussian_diffusion import ClusteredGaussianDiffusion
-from .test_model import TestModel
+# from .test_model import TestModel
+from .clustered_model import ClusteredModel
 
 
 def space_timesteps(num_timesteps, section_counts):
@@ -160,7 +161,6 @@ class SpacedClusteredDiffusion(ClusteredGaussianDiffusion):
         # Scaling is done by the wrapped model.
         return t
 
-# CHECK WRAPPED MODEL IS CAUSING ISSUES WHEN USING GUIDANCE AND DENOISE MODEL.
 class _WrappedModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         self.model = model
@@ -178,7 +178,8 @@ class _WrappedModel:
 class _WrappedClusteredModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         # Using model.module since its wrapped in DDP
-        if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+        # if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+        if isinstance(model, ClusteredModel): # FOR SAMPLING SCRIPT
             self.guidance_model = _WrappedGuidanceModel(model.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
             self.denoise_model = _WrappedModel(model.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
         else: # HAS TO BE DDP
