@@ -16,6 +16,7 @@ from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
+from .script_util import NUM_CLASSES
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -207,11 +208,9 @@ class TrainLoop:
                         sample_fn = (
                             self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
                         )
-                        # y = th.randint(
-                        #     low=0, high=10, size=(self.num_samples_visualize,), device=dist_util.dev()
-                        # )
+                        # y = th.randint(low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev())
                         # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
-                        y = th.tensor(([i for i in range(2)] * (self.num_samples_visualize // 2)), device=dist_util.dev())
+                        y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
                         model_kwargs = {'y': y}
                         samples = sample_fn(
                             self.ddp_model,

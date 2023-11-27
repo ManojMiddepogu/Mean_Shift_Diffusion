@@ -110,7 +110,6 @@ class Guidance_Model(nn.Module):
         mu = self.proj(reshape_emb_image)
         sigma_diff = self.sigma_diff(reshape_emb_image).squeeze()
         sigma = _extract_into_tensor(sqrt_one_minus_alphas_cumprod, timesteps, sigma_diff.shape) + F.relu(- sigma_diff)
-        # sigma = 1 - sigma_diff
 
         # HANDLING THE BASE CASE HERE ITSELF
         t_is_less_zero = (timesteps < 0)
@@ -123,10 +122,6 @@ class Guidance_Model(nn.Module):
             mu[t_is_less_zero] = zero_mu[t_is_less_zero]
             sigma[t_is_less_zero] = zero_sigma[t_is_less_zero]
 
-        # print(y)
-        # print(timesteps)
-        # print(mu)
-        # print(sigma)
         return mu, sigma
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):

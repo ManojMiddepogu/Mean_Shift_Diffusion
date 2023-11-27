@@ -518,7 +518,8 @@ class ClusteredGaussianDiffusion:
             distance_diff = distance_matrix_diff.max(dim=1).values
             distance_diff[distance_diff == -float("inf")] = th.tensor(float('inf')) # => No diff class
 
-            terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
+            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
+            terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
 
             # labels = y['y']
             # b = labels.shape[0]
