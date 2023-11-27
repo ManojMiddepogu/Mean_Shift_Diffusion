@@ -147,7 +147,7 @@ class ClusteredGaussianDiffusion:
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
 
-        # self.test_print = True
+        self.test_print = True
 
     def q_mean_variance(self, x_start, t, mu_bar_y_t, sigma_bar_y_t):
         mean = (
@@ -385,10 +385,10 @@ class ClusteredGaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
-            t = th.tensor([indices[-1]] * shape[0], device=device)
+            t = th.tensor([indices[0]] * shape[0], device=device)
             with th.no_grad():
-                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, y)
-                img = mu_bar_y_t + _broadcast_tensor(sigma_bar_y_t, img.shape) * img        
+                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+                img = mu_bar_y_t + _broadcast_tensor(sigma_bar_y_t, img.shape) * img
 
         if progress:
             # Lazy import so that we don't depend on tqdm.
@@ -399,15 +399,20 @@ class ClusteredGaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
-                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, y)
-                mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, y)
+                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+                mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
                 mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
                 t_is_zero = (t == 0)
                 if t_is_zero.any():
                     t_incremented = th.where(t_is_zero, t+1, t)
                     # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0
                     # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
-                    mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, y)
+                    mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+                if self.test_print:
+                    print(sigma_bar_y_t)
+                    self.test_print = False
+                    # print(sigma_bar_y_tm1)
+                    # print(sigma_bar_y_tp1)
                 out = self.p_sample(
                     model, # PASSING WHOLE MODEL HERE, AND WILL PICK DENOISE MODEL INSIDE
                     img,
@@ -463,17 +468,18 @@ class ClusteredGaussianDiffusion:
         denoise_model = model.denoise_model
 
         # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
-        mu_bar_y_t, sigma_bar_y_t = guidance_model(t, y)
+        mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
         # CHECK - for t==0, i.e., t-1 < 0; mu_bar and sigma_bar should be ideally 0.
             # CHECK - IN THIS CASE ARE THE MODEL GIVEN VALUES USED ANYWHERE? THEY SHOULD DEFINITELY NOT BE USED IN GRADIENT COMPUTATION.....
-        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, y)
+        # THIS SHOULD BE sqrt_one_minus_alphas_cumprod AND NOT sqrt_one_minus_alphas_cumprod_prev, SINCE I AM PASSING t-1 AS INPUT. SAME GOES FOR OTHER PLACES AS WELL.
+        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
         mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
         t_is_zero = (t == 0)
         if t_is_zero.any():
             t_incremented = th.where(t_is_zero, t+1, t)
             # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0 IN q_posterior_variance
             # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
-            mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, y)
+            mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES

@@ -208,9 +208,10 @@ class TrainLoop:
                             self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
                         )
                         # y = th.randint(
-                        #     low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev()
+                        #     low=0, high=10, size=(self.num_samples_visualize,), device=dist_util.dev()
                         # )
-                        y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
+                        # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
+                        y = th.tensor(([i for i in range(2)] * (self.num_samples_visualize // 2)), device=dist_util.dev())
                         model_kwargs = {'y': y}
                         samples = sample_fn(
                             self.ddp_model,

@@ -196,9 +196,11 @@ class _WrappedGuidanceModel:
         self.rescale_timesteps = rescale_timesteps
         self.original_num_steps = original_num_steps
 
-    def __call__(self, y, ts, **kwargs):
+    # def __call__(self, ts, y, **kwargs):
+    def __call__(self, ts, sqrt_one_minus_alphas_cumprod, y, **kwargs):
         map_tensor = th.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
         new_ts = map_tensor[ts]
         if self.rescale_timesteps:
             new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
-        return self.model(y, new_ts, **kwargs)
+        # return self.model(new_ts, y, **kwargs)
+        return self.model(new_ts, sqrt_one_minus_alphas_cumprod, y, **kwargs)

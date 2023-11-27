@@ -48,9 +48,10 @@ def main():
             # classes = th.randint(
             #     low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
             # )
-            classes = th.randint(
-                low=0, high=1, size=(args.batch_size,), device=dist_util.dev()
-            )
+            # classes = th.randint(
+            #     low=0, high=1, size=(args.batch_size,), device=dist_util.dev()
+            # )
+            classes = th.tensor(([i for i in range(2)] * (args.batch_size // 2)), device=dist_util.dev())
             model_kwargs["y"] = classes
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
