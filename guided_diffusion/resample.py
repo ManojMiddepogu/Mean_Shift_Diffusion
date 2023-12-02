@@ -77,13 +77,22 @@ class SameTSampler(ScheduleSampler):
     def weights(self):
         return self._weights
     
-    def sample(self, batch_size, device):
-        w = self.weights()
-        p = w / np.sum(w)
-        indices_np = np.random.choice(len(p), size=(1,), p=p)
-        indices = th.full((batch_size,), indices_np[0], dtype=th.long).to(device)
-        weights_np = 1 / (len(p) * p[indices_np])
-        weights = th.full((batch_size,), weights_np[0], dtype=th.float).to(device)
+    def sample(self, batch_size, device, no_guidance = False):
+        if no_guidance:
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(batch_size,), p=p)
+            indices = th.from_numpy(indices_np).long().to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.from_numpy(weights_np).float().to(device)
+        else:
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(1,), p=p)
+            indices = th.full((batch_size,), indices_np[0], dtype=th.long).to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.full((batch_size,), weights_np[0], dtype=th.float).to(device)
+        
         return indices, weights
 
 

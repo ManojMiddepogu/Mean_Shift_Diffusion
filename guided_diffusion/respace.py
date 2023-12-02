@@ -195,6 +195,9 @@ class _WrappedGuidanceModel:
         self.timestep_map = timestep_map
         self.rescale_timesteps = rescale_timesteps
         self.original_num_steps = original_num_steps
+    
+    def eval(self):
+        self.model.eval()
 
     # def __call__(self, ts, y, **kwargs):
     def __call__(self, ts, sqrt_one_minus_alphas_cumprod, y, **kwargs):
