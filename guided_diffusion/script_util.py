@@ -5,7 +5,8 @@ from . import gaussian_diffusion as gd
 from . import clustered_gaussian_diffusion as cgd
 from .respace import SpacedDiffusion, SpacedClusteredDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
-from .test_model import TestModel
+# from .test_model import TestModel
+from .clustered_model import ClusteredModel
 
 # NUM_CLASSES = 1000
 NUM_CLASSES = 10
@@ -290,7 +291,7 @@ def create_clustered_model(
     num_res_blocks,
     channel_mult="",
     learn_sigma=False,
-    class_cond=False, # CHECK - HOW IS THIS HANDLED?
+    class_cond=False,
     use_checkpoint=False,
     attention_resolutions="16",
     num_heads=1,
@@ -304,9 +305,6 @@ def create_clustered_model(
 ):
     if learn_sigma:
         raise NotImplementedError(f"learning sigma not implemented!")
-    
-    if class_cond:
-        raise NotImplementedError(f"Class condition not implemented!")
 
     if channel_mult == "":
         if image_size == 512:
@@ -328,7 +326,8 @@ def create_clustered_model(
     for res in attention_resolutions.split(","):
         attention_ds.append(image_size // int(res))
 
-    return TestModel(
+    # return TestModel(
+    return ClusteredModel(
         image_size=image_size,
         in_channels=3,
         model_channels=num_channels,

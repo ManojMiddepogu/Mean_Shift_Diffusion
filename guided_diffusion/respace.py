@@ -3,7 +3,8 @@ import torch as th
 
 from .gaussian_diffusion import GaussianDiffusion
 from .clustered_gaussian_diffusion import ClusteredGaussianDiffusion
-from .test_model import TestModel
+# from .test_model import TestModel
+from .clustered_model import ClusteredModel
 
 
 def space_timesteps(num_timesteps, section_counts):
@@ -160,7 +161,6 @@ class SpacedClusteredDiffusion(ClusteredGaussianDiffusion):
         # Scaling is done by the wrapped model.
         return t
 
-# CHECK WRAPPED MODEL IS CAUSING ISSUES WHEN USING GUIDANCE AND DENOISE MODEL.
 class _WrappedModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         self.model = model
@@ -178,7 +178,8 @@ class _WrappedModel:
 class _WrappedClusteredModel:
     def __init__(self, model, timestep_map, rescale_timesteps, original_num_steps):
         # Using model.module since its wrapped in DDP
-        if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+        # if isinstance(model, TestModel): # FOR SAMPLING SCRIPT
+        if isinstance(model, ClusteredModel): # FOR SAMPLING SCRIPT
             self.guidance_model = _WrappedGuidanceModel(model.guidance_model, timestep_map, rescale_timesteps, original_num_steps)
             self.denoise_model = _WrappedModel(model.denoise_model, timestep_map, rescale_timesteps, original_num_steps)
         else: # HAS TO BE DDP
@@ -195,9 +196,11 @@ class _WrappedGuidanceModel:
         self.rescale_timesteps = rescale_timesteps
         self.original_num_steps = original_num_steps
 
-    def __call__(self, y, ts, **kwargs):
+    # def __call__(self, ts, y, **kwargs):
+    def __call__(self, ts, sqrt_one_minus_alphas_cumprod, y, **kwargs):
         map_tensor = th.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
         new_ts = map_tensor[ts]
         if self.rescale_timesteps:
             new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
-        return self.model(y, new_ts, **kwargs)
+        # return self.model(new_ts, y, **kwargs)
+        return self.model(new_ts, sqrt_one_minus_alphas_cumprod, y, **kwargs)

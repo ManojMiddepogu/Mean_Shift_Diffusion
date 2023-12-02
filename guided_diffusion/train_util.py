@@ -16,6 +16,7 @@ from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
+from .script_util import NUM_CLASSES
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -47,6 +48,7 @@ class TrainLoop:
         num_samples_visualize=25,
         use_ddim=False,
         image_size=64,
+        use_wandb=True,
     ):
         self.model = model
         self.diffusion = diffusion
@@ -72,6 +74,7 @@ class TrainLoop:
         self.num_samples_visualize = num_samples_visualize
         self.use_ddim = use_ddim
         self.image_size = image_size
+        self.use_wandb = use_wandb
 
         self.step = 0
         self.resume_step = 0
@@ -205,11 +208,15 @@ class TrainLoop:
                         sample_fn = (
                             self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
                         )
+                        # y = th.randint(low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev())
+                        # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
+                        y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
+                        model_kwargs = {'y': y}
                         samples = sample_fn(
                             self.ddp_model,
                             (self.num_samples_visualize, 3, self.image_size, self.image_size),
                             clip_denoised=self.clip_denoised,
-                            model_kwargs={}, # CHECK - HANDLE CLASS CONDITIONAL HERE?
+                            model_kwargs=model_kwargs,
                         )
                         # Normalize samples to [0, 255] and change to uint8
                         samples = ((samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
@@ -219,7 +226,8 @@ class TrainLoop:
                         image_list = [sample.cpu().numpy() for sample in samples]
                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
 
-                        wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]})
+                        if self.use_wandb:
+                            wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]})
                         
                     self.ddp_model.train()
                 
@@ -249,7 +257,6 @@ class TrainLoop:
                 for k, v in cond.items()
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
-            # CHECK - FOR CLUSTERED DIFFUSION, SAMPLE THE SAME T?
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
             compute_losses = functools.partial(
@@ -257,9 +264,7 @@ class TrainLoop:
                 self.ddp_model,
                 micro,
                 t,
-                micro_cond, # CHECK - THIS WILL BREAK BASELINE TRAINING, THINK OF A WAY TO FIX THIS
-                # model_kwargs=micro_cond,
-                model_kwargs={}, # CHECK - SETTING MODEL_KWARGS TO {} SO ITS NOT CLASS CONDITIONAL
+                model_kwargs=micro_cond,
             )
 
             if last_batch or not self.use_ddp:
@@ -282,8 +287,10 @@ class TrainLoop:
                     "step": self.step + self.resume_step,
                     "samples": (self.step + self.resume_step + 1) * self.global_batch
                 }
-                wandb_log_data = {**step_values, **logged_data}
-                wandb.log(wandb_log_data)
+                if self.use_wandb:
+                    wandb_log_data = {**step_values, **logged_data}
+                    wandb_log_data["t"] = t.mean(dtype = th.float)
+                    wandb.log(wandb_log_data)
             self.mp_trainer.backward(loss)
 
     def _update_ema(self):

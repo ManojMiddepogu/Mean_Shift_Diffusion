@@ -45,10 +45,10 @@ def main():
     while len(all_images) * args.batch_size < args.num_samples:
         model_kwargs = {}
         if args.class_cond:
-            classes = th.randint(
-                low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
-            )
-            model_kwargs["y"] = classes # CHECK - THIS DOESN'T MATTER AS OF NOW, SINCE P_MEAN_VARIANCE IS SETTING THIS TO NONE FOR NOW
+            # classes = th.randint(low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev())
+            # classes = th.tensor([0] * args.batch_size, device=dist_util.dev())
+            classes = th.tensor(([i for i in range(NUM_CLASSES)] * (args.batch_size // NUM_CLASSES)), device=dist_util.dev())
+            model_kwargs["y"] = classes
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
         )

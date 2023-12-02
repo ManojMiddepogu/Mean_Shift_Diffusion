@@ -19,7 +19,7 @@ cd /scratch/mm12799/Clustered_Diffusion
 conda activate diffusion
 
 OPENAI_LOGDIR=/scratch/mm12799/Clustered_Diffusion/logs/logs_test_run GPUS_PER_NODE=2 \
-python3 scripts/image_train.py --data_dir /scratch/mm12799/datasets/mnist/train --image_size 32 --num_channels 64 \
+python3 scripts/image_train.py --data_dir /scratch/mm12799/datasets/mnist/train --image_size 32 --num_channels 64 --class_cond True --schedule_sampler loss-second-moment \
  --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 --batch_size 128 --lr_anneal_steps 5 \
  --diffusion_steps 1000 --noise_schedule linear
 "

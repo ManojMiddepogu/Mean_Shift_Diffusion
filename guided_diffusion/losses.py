@@ -39,6 +39,23 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
     )
 
 
+def normal_js(mean1, logvar1, mean2, logvar2):
+    mean_m = 0.5 * (mean1 + mean2)
+    logvar_m = th.log(0.25 * (th.exp(logvar1) + th.exp(logvar2)))
+
+    kl1 = normal_kl(mean1, logvar1, mean_m, logvar_m)
+    kl2 = normal_kl(mean2, logvar2, mean_m, logvar_m)
+
+    return 0.5 * (kl1 + kl2)
+
+
+def normal_wd(mean1, logvar1, mean2, logvar2):
+    std1 = th.exp(0.5 * logvar1)
+    std2 = th.exp(0.5 * logvar2)
+
+    return (mean1 - mean2) ** 2 + (std1 - std2) ** 2
+
+
 def approx_standard_normal_cdf(x):
     """
     A fast approximation of the cumulative distribution function of the

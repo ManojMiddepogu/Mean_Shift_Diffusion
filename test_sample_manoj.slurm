@@ -17,7 +17,7 @@ source /ext3/env.sh
 cd /scratch/mm12799/Clustered_Diffusion
 conda activate diffusion
 
-OPENAI_LOGDIR=/scratch/mm12799/Clustered_Diffusion/guided_diffusion/logs/logs_test_run GPUS_PER_NODE=1 \
+OPENAI_LOGDIR=/scratch/mm12799/Clustered_Diffusion/guided_diffusion/logs/logs_test_run GPUS_PER_NODE=1 --class_cond True \
 python3 scripts/image_sample.py --num_samples 32 --batch_size 32 --use_ddim False \
  --model_path /scratch/mm12799/Clustered_Diffusion/guided_diffusion/logs/logs_test_run/model030000.pt \
  --image_size 32 --num_channels 64 \
