@@ -26,6 +26,9 @@ def plot_multiple_gaussian_contours(means, sigmas):
 
     print(means.shape)
     print(sigmas.shape)
+    print(means.max(1))
+    print(means.min(1))
+    print(means.mean(1))
 
     # Check if the lengths of means and sigmas are equal
     # if means.shape != sigmas.shape:
@@ -38,12 +41,14 @@ def plot_multiple_gaussian_contours(means, sigmas):
     fig, ax = plt.subplots()
 
     # Plot circles for each Gaussian distribution
-    for mean, sigma in zip(reduced_means, sigmas):
+    for index, (mean, sigma) in enumerate(zip(reduced_means, sigmas)):
         ellipse = Ellipse(xy=mean, width=3 * sigma, height=3 * sigma, edgecolor='r', fc='None', lw=2)
         ax.add_patch(ellipse)
-        ax.scatter(mean[0], mean[1], c='red', marker='x')
+        # ax.scatter(mean[0], mean[1], c='red', marker='x')
         # circle = plt.Circle((mean[0], mean[1]), 3, color='b', fill=False)
         # ax.add_artist(circle)
+
+        ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
 
     # Setting the limits of the plot
     ax.set_xlim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))

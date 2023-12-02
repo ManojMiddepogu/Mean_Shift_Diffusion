@@ -257,7 +257,9 @@ class TrainLoop:
                 for k, v in cond.items()
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
-            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+
+            no_guidance = self.step > 2000
+            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), no_guidance=no_guidance)
 
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
@@ -265,6 +267,7 @@ class TrainLoop:
                 micro,
                 t,
                 model_kwargs=micro_cond,
+                no_guidance=no_guidance
             )
 
             if last_batch or not self.use_ddp:

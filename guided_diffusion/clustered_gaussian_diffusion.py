@@ -454,7 +454,7 @@ class ClusteredGaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
     
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, no_guidance=False):
         # CHECK - LOSS IS NOT IMPLEMENTED YET.
         y = model_kwargs['y']
         if model_kwargs is None:
@@ -466,6 +466,9 @@ class ClusteredGaussianDiffusion:
         
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
+
+        if no_guidance:
+            guidance_model.eval()
 
         # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
         mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
@@ -484,73 +487,75 @@ class ClusteredGaussianDiffusion:
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
         terms["guidance_loss"] = 0.0
-        if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
-            b, *shape = q_mean.shape
+        # if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
+        if not no_guidance:
+            if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
+                b, *shape = q_mean.shape
 
-            # Expand and repeat mean and sigma for vectorized computation
-            q_mean_1 = q_mean.unsqueeze(1).expand(b, b, *shape)
-            q_log_variance_1 = q_log_variance.unsqueeze(1).expand(b, b, *shape)
-            q_mean_2 = q_mean.unsqueeze(0).expand(b, b, *shape)
-            q_log_variance_2 = q_log_variance.unsqueeze(0).expand(b, b, *shape)
+                # Expand and repeat mean and sigma for vectorized computation
+                q_mean_1 = q_mean.unsqueeze(1).expand(b, b, *shape)
+                q_log_variance_1 = q_log_variance.unsqueeze(1).expand(b, b, *shape)
+                q_mean_2 = q_mean.unsqueeze(0).expand(b, b, *shape)
+                q_log_variance_2 = q_log_variance.unsqueeze(0).expand(b, b, *shape)
 
-            # Compute distance -> bxb
-            distance_matrix = mean_flat_2(normal_js(q_mean_1, q_log_variance_1, q_mean_2, q_log_variance_2)) \
-                        if self.guidance_loss_type == ClusteredGuidanceLossType.JS else \
-                                mean_flat_2(normal_wd(q_mean_1, q_log_variance_1, q_mean_2, q_log_variance_2))
-            distance_matrix_diff = distance_matrix.clone()
+                # Compute distance -> bxb
+                distance_matrix = mean_flat_2(normal_js(q_mean_1, q_log_variance_1, q_mean_2, q_log_variance_2)) \
+                            if self.guidance_loss_type == ClusteredGuidanceLossType.JS else \
+                                    mean_flat_2(normal_wd(q_mean_1, q_log_variance_1, q_mean_2, q_log_variance_2))
+                distance_matrix_diff = distance_matrix.clone()
 
-            # Expand labels for comparison
-            labels_expanded = y.view(b, 1).expand(b, b)
-            same_class_mask = labels_expanded.eq(labels_expanded.t())
-            diff_class_mask = ~same_class_mask
+                # Expand labels for comparison
+                labels_expanded = y.view(b, 1).expand(b, b)
+                same_class_mask = labels_expanded.eq(labels_expanded.t())
+                diff_class_mask = ~same_class_mask
 
-            # Masks to avoid self-comparison
-            eye_mask = th.eye(b).bool()
-            same_class_mask[eye_mask] = False
-            distance_matrix[eye_mask] = th.tensor(-float('inf')) # update same batch element for min
-            distance_matrix_diff[eye_mask] = th.tensor(float('inf')) # update same batch element for max
+                # Masks to avoid self-comparison
+                eye_mask = th.eye(b).bool()
+                same_class_mask[eye_mask] = False
+                distance_matrix[eye_mask] = th.tensor(-float('inf')) # update same batch element for min
+                distance_matrix_diff[eye_mask] = th.tensor(float('inf')) # update same batch element for max
 
-            distance_matrix[diff_class_mask] = th.tensor(-float('inf')) # Update diff class elements for min
-            distance_matrix_diff[same_class_mask] = th.tensor(float('inf')) # Update same class elements for max
+                distance_matrix[diff_class_mask] = th.tensor(-float('inf')) # Update diff class elements for min
+                distance_matrix_diff[same_class_mask] = th.tensor(float('inf')) # Update same class elements for max
 
-            distance_same = distance_matrix.max(dim=1).values
-            distance_same[distance_same == -float("inf")] = 0.0 # => No same class
-            distance_diff = distance_matrix_diff.min(dim=1).values
-            distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
+                distance_same = distance_matrix.max(dim=1).values
+                distance_same[distance_same == -float("inf")] = 0.0 # => No same class
+                distance_diff = distance_matrix_diff.min(dim=1).values
+                distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
 
-            terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
-            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
-            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 6))
+                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
+                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
+                terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 6))
 
-            # labels = y['y']
-            # b = labels.shape[0]
-            
-            # # Expand labels for comparison
-            # labels_expanded = labels.view(b, 1).expand(b, b)
-            # same_class_mask = labels_expanded.eq(labels_expanded.t())
-            # diff_class_mask = ~same_class_mask
+                # labels = y['y']
+                # b = labels.shape[0]
+                
+                # # Expand labels for comparison
+                # labels_expanded = labels.view(b, 1).expand(b, b)
+                # same_class_mask = labels_expanded.eq(labels_expanded.t())
+                # diff_class_mask = ~same_class_mask
 
-            # # CHECK - DO WE MASK OUT SELF EXAMPLES?
+                # # CHECK - DO WE MASK OUT SELF EXAMPLES?
 
-            # # Randomly select indices for same and different classes
-            # same_class_indices = [th.masked_select(th.arange(b), same_class_mask[i]) for i in range(b)]
-            # diff_class_indices = [th.masked_select(th.arange(b), diff_class_mask[i]) for i in range(b)]
+                # # Randomly select indices for same and different classes
+                # same_class_indices = [th.masked_select(th.arange(b), same_class_mask[i]) for i in range(b)]
+                # diff_class_indices = [th.masked_select(th.arange(b), diff_class_mask[i]) for i in range(b)]
 
-            # same_class_indices = [random.choice(indices) for indices in same_class_indices]
-            # diff_class_indices = [random.choice(indices) for indices in diff_class_indices]
+                # same_class_indices = [random.choice(indices) for indices in same_class_indices]
+                # diff_class_indices = [random.choice(indices) for indices in diff_class_indices]
 
-            # same_class_mean = q_mean[same_class_indices]
-            # same_class_log_variance = q_log_variance[same_class_indices]
-            # diff_class_mean = q_mean[diff_class_indices]
-            # diff_class_log_variance = q_log_variance[diff_class_indices]
+                # same_class_mean = q_mean[same_class_indices]
+                # same_class_log_variance = q_log_variance[same_class_indices]
+                # diff_class_mean = q_mean[diff_class_indices]
+                # diff_class_log_variance = q_log_variance[diff_class_indices]
 
-            # js_same = mean_flat(normal_js(q_mean, q_log_variance, same_class_mean, same_class_log_variance))
-            # js_diff = mean_flat(normal_js(q_mean, q_log_variance, diff_class_mean, diff_class_log_variance))
+                # js_same = mean_flat(normal_js(q_mean, q_log_variance, same_class_mean, same_class_log_variance))
+                # js_diff = mean_flat(normal_js(q_mean, q_log_variance, diff_class_mean, diff_class_log_variance))
 
-            # # CHECK - TRIPLET LOSS MIN DISTANCE?? 1??
-            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(js_same - js_diff + 1))
-        else:
-            raise NotImplementedError(self.guidance_loss_type)
+                # # CHECK - TRIPLET LOSS MIN DISTANCE?? 1??
+                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(js_same - js_diff + 1))
+            else:
+                raise NotImplementedError(self.guidance_loss_type)
 
         x_t = self.q_sample(x_start, t, mu_bar_y_t, sigma_bar_y_t, noise)
         if self.denoise_loss_type == ClusteredDenoiseLossType.KL or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_KL:
