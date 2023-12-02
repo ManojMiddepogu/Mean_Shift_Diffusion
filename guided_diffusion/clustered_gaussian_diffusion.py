@@ -507,19 +507,20 @@ class ClusteredGaussianDiffusion:
             # Masks to avoid self-comparison
             eye_mask = th.eye(b).bool()
             same_class_mask[eye_mask] = False
-            distance_matrix[eye_mask] = th.tensor(float('inf')) # update same batch element for min
-            distance_matrix_diff[eye_mask] = th.tensor(-float('inf')) # update same batch element for max
+            distance_matrix[eye_mask] = th.tensor(-float('inf')) # update same batch element for min
+            distance_matrix_diff[eye_mask] = th.tensor(float('inf')) # update same batch element for max
 
-            distance_matrix[diff_class_mask] = th.tensor(float('inf')) # Update diff class elements for min
-            distance_matrix_diff[same_class_mask] = th.tensor(-float('inf')) # Update same class elements for max
+            distance_matrix[diff_class_mask] = th.tensor(-float('inf')) # Update diff class elements for min
+            distance_matrix_diff[same_class_mask] = th.tensor(float('inf')) # Update same class elements for max
 
-            distance_same = distance_matrix.min(dim=1).values
-            distance_same[distance_same == float("inf")] = 0.0 # => No same class
-            distance_diff = distance_matrix_diff.max(dim=1).values
-            distance_diff[distance_diff == -float("inf")] = th.tensor(float('inf')) # => No diff class
+            distance_same = distance_matrix.max(dim=1).values
+            distance_same[distance_same == -float("inf")] = 0.0 # => No same class
+            distance_diff = distance_matrix_diff.min(dim=1).values
+            distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
 
-            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
-            terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
+            terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
+            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
+            # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 6))
 
             # labels = y['y']
             # b = labels.shape[0]

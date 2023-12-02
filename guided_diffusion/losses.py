@@ -53,7 +53,7 @@ def normal_wd(mean1, logvar1, mean2, logvar2):
     std1 = th.exp(0.5 * logvar1)
     std2 = th.exp(0.5 * logvar2)
 
-    return (mean1 - mean2) ** 2 + (th.exp(0.5 * logvar1) - th.exp(0.5 * logvar2)) ** 2
+    return (mean1 - mean2) ** 2 + (std1 - std2) ** 2
 
 
 def approx_standard_normal_cdf(x):

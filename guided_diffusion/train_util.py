@@ -289,6 +289,7 @@ class TrainLoop:
                 }
                 if self.use_wandb:
                     wandb_log_data = {**step_values, **logged_data}
+                    wandb_log_data["t"] = t.mean(dtype = th.float)
                     wandb.log(wandb_log_data)
             self.mp_trainer.backward(loss)
 
