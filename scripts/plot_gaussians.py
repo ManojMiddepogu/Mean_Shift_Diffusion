@@ -19,7 +19,7 @@ from guided_diffusion.script_util import (
 from sklearn.decomposition import PCA
 from matplotlib.patches import Ellipse
 
-def plot_multiple_gaussian_contours(means, sigmas):
+def plot_multiple_gaussian_contours(means, sigmas, model_path):
     # Convert inputs to numpy arrays if they are not already
     means = np.array(means.view(10, -1).to('cpu'))
     sigmas = np.array(sigmas.view(10, -1).to('cpu'))
@@ -60,7 +60,9 @@ def plot_multiple_gaussian_contours(means, sigmas):
     ax.set_ylabel('Y-axis')
     ax.set_title('Contours of Multiple 1D Gaussian Distributions')
 
-    save_path = os.path.join(logger.get_dir(), f"gaussian_plot.png")
+    resume_step = parse_resume_step_from_filename(model_path)
+
+    save_path = os.path.join(logger.get_dir(), f"gaussian_plot_{resume_step}.png")
     plt.savefig(save_path, bbox_inches='tight')
 
     # plt.show()
@@ -107,7 +109,7 @@ def main():
         distance_matrix = mean_flat_2(normal_js(q_mean_1, q_log_variance_1, q_mean_2, q_log_variance_2))
         print(distance_matrix)
 
-        plot_multiple_gaussian_contours(mu_bar, sigma_bar)
+        plot_multiple_gaussian_contours(mu_bar, sigma_bar, args.model_path)
 
 
 def create_argparser():
@@ -123,6 +125,21 @@ def _broadcast_tensor(t, broadcast_shape):
     while len(t.shape) < len(broadcast_shape):
         t = t[..., None]
     return t.expand(broadcast_shape)
+
+
+def parse_resume_step_from_filename(filename):
+    """
+    Parse filenames of the form path/to/modelNNNNNN.pt, where NNNNNN is the
+    checkpoint's number of steps.
+    """
+    split = filename.split("model")
+    if len(split) < 2:
+        return 0
+    split1 = split[-1].split(".")[0]
+    try:
+        return int(split1)
+    except ValueError:
+        return 0
 
 
 if __name__ == "__main__":
