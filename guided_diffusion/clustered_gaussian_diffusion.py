@@ -109,7 +109,9 @@ class ClusteredGaussianDiffusion:
         model_var_type,
         guidance_loss_type,
         denoise_loss_type,
+        distance,
         rescale_timesteps=False,
+        mu0sigma1=False,
     ):
         self.model_mean_type = model_mean_type
         if self.model_mean_type not in [ClusteredModelMeanType.EPSILON]:
@@ -119,7 +121,9 @@ class ClusteredGaussianDiffusion:
             raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
         self.guidance_loss_type = guidance_loss_type
         self.denoise_loss_type = denoise_loss_type
+        self.distance = distance
         self.rescale_timesteps = rescale_timesteps
+        self.mu0sigma1 = mu0sigma1
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -497,7 +501,7 @@ class ClusteredGaussianDiffusion:
         # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
         terms["guidance_loss"] = 0.0
         # if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
-        if not no_guidance:
+        if not no_guidance and self.mu0sigma1 is False:
             if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
                 b, *shape = q_mean.shape
 
@@ -532,9 +536,7 @@ class ClusteredGaussianDiffusion:
                 distance_diff = distance_matrix_diff.min(dim=1).values
                 distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
 
-                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 1))
-                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 3))
-                terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + 6))
+                terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance))
 
                 # labels = y['y']
                 # b = labels.shape[0]

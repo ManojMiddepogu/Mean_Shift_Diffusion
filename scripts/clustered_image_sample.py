@@ -45,18 +45,20 @@ def main():
     while len(all_images) * args.batch_size < args.num_samples:
         model_kwargs = {}
         if args.class_cond:
-            # classes = th.randint(low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev())
+            classes = th.randint(low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev())
             # classes = th.tensor([0] * args.batch_size, device=dist_util.dev())
-            classes = th.tensor(([i for i in range(NUM_CLASSES)] * (args.batch_size // NUM_CLASSES)), device=dist_util.dev())
+            # classes = th.tensor(([i for i in range(NUM_CLASSES)] * (args.batch_size // NUM_CLASSES)), device=dist_util.dev())
             model_kwargs["y"] = classes
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
         )
+        # noise = th.randn((args.batch_size, 3, args.image_size, args.image_size), device=dist_util.dev())
         sample = sample_fn(
             model,
             (args.batch_size, 3, args.image_size, args.image_size),
             clip_denoised=args.clip_denoised,
             model_kwargs=model_kwargs,
+            # noise = noise,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)

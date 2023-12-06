@@ -62,6 +62,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        no_guidance_step=args.no_guidance_step,
         # Sampling arguments for visualization during training
         clip_denoised=args.clip_denoised,
         num_samples_visualize=args.num_samples_visualize,
@@ -81,6 +82,7 @@ def create_argparser():
         lr=1e-4,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        no_guidance_step=2000,
         batch_size=1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
