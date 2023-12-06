@@ -46,6 +46,7 @@ class ClusteredModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
+        mu0sigma1 = False,
     ):
         super().__init__()
 
@@ -59,6 +60,7 @@ class ClusteredModel(nn.Module):
             use_checkpoint=use_checkpoint,
             use_fp16=use_fp16,
             use_scale_shift_norm=use_scale_shift_norm,
+            mu0sigma1=mu0sigma1,
         )
 
         self.denoise_model = UNetModel(

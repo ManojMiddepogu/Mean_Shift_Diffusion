@@ -56,6 +56,7 @@ class Guidance_Model(nn.Module):
         use_checkpoint=False,
         use_fp16=False,
         use_scale_shift_norm=False,
+        mu0sigma1 = False,
     ):
         super().__init__()
         self.image_size = image_size
@@ -94,6 +95,8 @@ class Guidance_Model(nn.Module):
             zero_module(conv_nd(dims, self.model_channels, 1, image_size, padding = 0)),
         )
 
+        self.mu0sigma1 = mu0sigma1
+
     def forward(self, timesteps, sqrt_one_minus_alphas_cumprod, y=None):
     # def forward(self, timesteps, y=None):
         """
@@ -102,14 +105,19 @@ class Guidance_Model(nn.Module):
         :return: an [N x C x H x W] Tensor of outputs.
         """
         assert (y is not None) , "must specify y"
-        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels)) #(N,TE)
-        label = self.label_emb(y) #(N,TE)
-        final_emb = emb + label
-        reshape_emb = self.reshape_block(final_emb)
-        reshape_emb_image = reshape_emb.view(-1, self.model_channels, self.image_size, self.image_size)
-        mu = self.proj(reshape_emb_image)
-        sigma_diff = self.sigma_diff(reshape_emb_image).squeeze()
-        sigma = _extract_into_tensor(sqrt_one_minus_alphas_cumprod, timesteps, sigma_diff.shape) + F.relu(- sigma_diff)
+
+        if self.mu0sigma1:
+            mu = th.zeros(timesteps.shape[0], self.out_channels, self.image_size, self.image_size, device=timesteps.device)
+            sigma = _extract_into_tensor(sqrt_one_minus_alphas_cumprod, timesteps, timesteps.shape)
+        else:
+            emb = self.time_embed(timestep_embedding(timesteps, self.model_channels)) #(N,TE)
+            label = self.label_emb(y) #(N,TE)
+            final_emb = emb + label
+            reshape_emb = self.reshape_block(final_emb)
+            reshape_emb_image = reshape_emb.view(-1, self.model_channels, self.image_size, self.image_size)
+            mu = self.proj(reshape_emb_image)
+            sigma_diff = self.sigma_diff(reshape_emb_image).squeeze()
+            sigma = _extract_into_tensor(sqrt_one_minus_alphas_cumprod, timesteps, sigma_diff.shape) + F.relu(- sigma_diff)
 
         # HANDLING THE BASE CASE HERE ITSELF
         t_is_less_zero = (timesteps < 0)
@@ -121,6 +129,9 @@ class Guidance_Model(nn.Module):
             # Replacing the corresponding elements with zeros
             mu[t_is_less_zero] = zero_mu[t_is_less_zero]
             sigma[t_is_less_zero] = zero_sigma[t_is_less_zero]
+        
+        if self.mu0sigma1:
+            mu, sigma = mu.detach(), sigma.detach()
 
         return mu, sigma
 

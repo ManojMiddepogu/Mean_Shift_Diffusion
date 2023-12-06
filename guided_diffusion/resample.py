@@ -18,6 +18,8 @@ def create_named_schedule_sampler(name, diffusion):
         return SameTSampler(diffusion)
     elif name == "loss-second-moment":
         return LossSecondMomentResampler(diffusion)
+    elif name == "loss-second-moment-same-t":
+        return LossSecondMomentResamplerAfterSameT(diffusion)
     else:
         raise NotImplementedError(f"unknown schedule sampler: {name}")
 
@@ -41,7 +43,7 @@ class ScheduleSampler(ABC):
         The weights needn't be normalized, but must be positive.
         """
 
-    def sample(self, batch_size, device):
+    def sample(self, batch_size, device, no_guidance = False):
         """
         Importance-sample timesteps for a batch.
 
@@ -181,3 +183,54 @@ class LossSecondMomentResampler(LossAwareSampler):
 
     def _warmed_up(self):
         return (self._loss_counts == self.history_per_term).all()
+
+
+class LossSecondMomentResamplerAfterSameT(LossAwareSampler):
+    def __init__(self, diffusion, history_per_term=10, uniform_prob=0.001):
+        self.diffusion = diffusion
+        self.history_per_term = history_per_term
+        self.uniform_prob = uniform_prob
+        self._loss_history = np.zeros(
+            [diffusion.num_timesteps, history_per_term], dtype=np.float64
+        )
+        self._loss_counts = np.zeros([diffusion.num_timesteps], dtype=np.int64)
+
+    def weights(self):
+        if not self._warmed_up():
+            return np.ones([self.diffusion.num_timesteps], dtype=np.float64)
+        weights = np.sqrt(np.mean(self._loss_history ** 2, axis=-1))
+        weights /= np.sum(weights)
+        weights *= 1 - self.uniform_prob
+        weights += self.uniform_prob / len(weights)
+        return weights
+
+    def update_with_all_losses(self, ts, losses):
+        for t, loss in zip(ts, losses):
+            if self._loss_counts[t] == self.history_per_term:
+                # Shift out the oldest loss term.
+                self._loss_history[t, :-1] = self._loss_history[t, 1:]
+                self._loss_history[t, -1] = loss
+            else:
+                self._loss_history[t, self._loss_counts[t]] = loss
+                self._loss_counts[t] += 1
+
+    def _warmed_up(self):
+        return (self._loss_counts == self.history_per_term).all()
+
+    def sample(self, batch_size, device, no_guidance = False):
+        if no_guidance:
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(batch_size,), p=p)
+            indices = th.from_numpy(indices_np).long().to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.from_numpy(weights_np).float().to(device)
+        else:
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(1,), p=p)
+            indices = th.full((batch_size,), indices_np[0], dtype=th.long).to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.full((batch_size,), weights_np[0], dtype=th.float).to(device)
+        
+        return indices, weights

@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
-from .resample import LossAwareSampler, UniformSampler
+from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, LossSecondMomentResamplerAfterSameT
 from .script_util import NUM_CLASSES
 
 # For ImageNet experiments, this was a good default value.
@@ -43,6 +43,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        no_guidance_step=2000,
         # Sampling arguments for visualization during training
         clip_denoised=True,
         num_samples_visualize=25,
@@ -69,6 +70,7 @@ class TrainLoop:
         self.schedule_sampler = schedule_sampler or UniformSampler(diffusion)
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
+        self.no_guidance_step = no_guidance_step
 
         self.clip_denoised = clip_denoised
         self.num_samples_visualize = num_samples_visualize
@@ -258,7 +260,7 @@ class TrainLoop:
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
 
-            no_guidance = self.step > 2000
+            no_guidance = self.step > self.no_guidance_step
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), no_guidance=no_guidance)
 
             compute_losses = functools.partial(
@@ -276,7 +278,14 @@ class TrainLoop:
                 with self.ddp_model.no_sync():
                     losses = compute_losses()
 
-            if isinstance(self.schedule_sampler, LossAwareSampler):
+            # THIS IS FOR BASELINE
+            if isinstance(self.schedule_sampler, LossSecondMomentResampler):
+                self.schedule_sampler.update_with_local_losses(
+                    t, losses["loss"].detach()
+                )
+            
+            # Stat Loss aware in clustered diffusion case only when guidance is turned off
+            if no_guidance and isinstance(self.schedule_sampler, LossSecondMomentResamplerAfterSameT):
                 self.schedule_sampler.update_with_local_losses(
                     t, losses["loss"].detach()
                 )
