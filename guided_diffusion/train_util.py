@@ -17,6 +17,10 @@ from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, LossSecondMomentResamplerAfterSameT
 from .script_util import NUM_CLASSES
+from .clustered_model import ClusteredModel
+from sklearn.decomposition import PCA
+from matplotlib.patches import Ellipse
+import matplotlib.pyplot as plt
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -188,6 +192,33 @@ class TrainLoop:
                 break
 
         return collage
+    
+    def _plot_multiple_gaussian_contours(self, means, sigmas):
+        # Convert inputs to numpy arrays if they are not already
+        means = np.array(means.view(10, -1).to('cpu'))
+        sigmas = np.array(sigmas.view(10, -1).to('cpu'))
+        reduced_means = PCA(n_components=2).fit_transform(means)
+
+        # Create a figure and axis
+        fig, ax = plt.subplots()
+
+        # Plot circles for each Gaussian distribution
+        for index, (mean, sigma) in enumerate(zip(reduced_means, sigmas)):
+            ellipse = Ellipse(xy=mean, width=6 * sigma, height=6 * sigma, edgecolor='r', fc='None', lw=2)
+            ax.add_patch(ellipse)
+            ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
+
+        # Setting the limits of the plot
+        ax.set_xlim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
+        ax.set_ylim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
+
+        # Add grid, labels and title
+        ax.grid(True)
+        ax.set_xlabel('X-axis')
+        ax.set_ylabel('Y-axis')
+        ax.set_title('Contours of Multiple 1D Gaussian Distributions')
+
+        return fig
 
     def run_loop(self):
         while (
@@ -204,6 +235,8 @@ class TrainLoop:
                 # Sample num_samples_visualize images everytime we save the model
                 if dist.get_rank() == 0:  # Make sure only the master process does the sampling
                     self.ddp_model.eval()
+
+                    wandb_log_images = {}
 
                     with th.no_grad():
                         # Generate samples
@@ -228,8 +261,21 @@ class TrainLoop:
                         image_list = [sample.cpu().numpy() for sample in samples]
                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
 
+                        wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
+                        
+                        # Plot Gaussians at the last time step for all classes if Clustered Model
+                        if isinstance(self.ddp_model.module, ClusteredModel):
+                            y = th.arange(NUM_CLASSES, device=dist_util.dev())
+                            plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
+                            model_kwargs = {"y": y}
+
+                            mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
+                            gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar)
+
+                            wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
+                        
                         if self.use_wandb:
-                            wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]})
+                            wandb.log(wandb_log_images)
                         
                     self.ddp_model.train()
                 
