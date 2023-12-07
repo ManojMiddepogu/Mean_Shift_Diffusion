@@ -42,7 +42,7 @@ def plot_multiple_gaussian_contours(means, sigmas, model_path):
 
     # Plot circles for each Gaussian distribution
     for index, (mean, sigma) in enumerate(zip(reduced_means, sigmas)):
-        ellipse = Ellipse(xy=mean, width=3 * sigma, height=3 * sigma, edgecolor='r', fc='None', lw=2)
+        ellipse = Ellipse(xy=mean, width=6 * sigma, height=6 * sigma, edgecolor='r', fc='None', lw=2)
         ax.add_patch(ellipse)
         # ax.scatter(mean[0], mean[1], c='red', marker='x')
         # circle = plt.Circle((mean[0], mean[1]), 3, color='b', fill=False)
@@ -51,8 +51,8 @@ def plot_multiple_gaussian_contours(means, sigmas, model_path):
         ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
 
     # Setting the limits of the plot
-    ax.set_xlim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
-    ax.set_ylim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
+    ax.set_xlim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
+    ax.set_ylim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
 
     # Add grid, labels and title
     ax.grid(True)
