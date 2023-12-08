@@ -21,6 +21,8 @@ from .clustered_model import ClusteredModel
 from sklearn.decomposition import PCA
 from matplotlib.patches import Ellipse
 import matplotlib.pyplot as plt
+from .fid_score import calculate_activation_statistics, calculate_frechet_distance
+from .inception import InceptionV3
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -53,6 +55,7 @@ class TrainLoop:
         num_samples_visualize=25,
         use_ddim=False,
         image_size=64,
+        training_data_inception_mu_sigma_path="",
         use_wandb=True,
     ):
         self.model = model
@@ -81,6 +84,20 @@ class TrainLoop:
         self.use_ddim = use_ddim
         self.image_size = image_size
         self.use_wandb = use_wandb
+
+        self.training_data_inception_mu_sigma_path = training_data_inception_mu_sigma_path
+        self.training_data_inception_mu = None
+        self.training_data_inception_sigma = None
+        self.inception_model = None
+        if self.training_data_inception_mu_sigma_path != "":
+            with np.load(self.training_data_inception_mu_sigma_path) as f:
+                self.training_data_inception_mu, self.training_data_inception_sigma = f['mu'][:], f['sigma'][:]
+                print("Loaded mu and sigma parameteres for FID calculation!")
+            
+            if dist.get_rank() == 0:
+                block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[2048]
+                self.inception_model = InceptionV3([block_idx]).to(dist_util.dev())
+                print("Loaded Inception model for FID calculation!")
 
         self.step = 0
         self.resume_step = 0
@@ -247,21 +264,30 @@ class TrainLoop:
                         # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
                         y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
                         model_kwargs = {'y': y}
-                        samples = sample_fn(
+                        generated_samples = sample_fn(
                             self.ddp_model,
                             (self.num_samples_visualize, 3, self.image_size, self.image_size),
                             clip_denoised=self.clip_denoised,
                             model_kwargs=model_kwargs,
                         )
                         # Normalize samples to [0, 255] and change to uint8
-                        samples = ((samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                        samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
                         # Rearrange the tensor to be in HWC format for image saving
                         samples = samples.permute(0, 2, 3, 1)
-                        samples = samples.contiguous()
-                        image_list = [sample.cpu().numpy() for sample in samples]
+                        samples = samples.contiguous().cpu().numpy()
+                        image_list = [sample for sample in samples]
                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
 
                         wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
+
+                        # Compute FID Score for the generated images
+                        if self.training_data_inception_mu_sigma_path != "":
+                            print("Calculating FID Score!")
+                            generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(samples, self.inception_model, batch_size=128, device=dist_util.dev())
+                            fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
+                            # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
+                            wandb_log_images["FID"] = fid_value
+                            print(f"Calculated FID Score - {fid_value}!")
                         
                         # Plot Gaussians at the last time step for all classes if Clustered Model
                         if isinstance(self.ddp_model.module, ClusteredModel):

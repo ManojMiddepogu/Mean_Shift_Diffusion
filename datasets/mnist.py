@@ -50,7 +50,7 @@ def generate_npz_file(dataset, npz_filename):
         # Convert tensor to numpy and append to list
         img_tensor = img_tensor.repeat(3, 1, 1)
         # NOTE HERE THE TRANFORM APPLIES GIVES IMAGE IN [0,1] RANGE, SO NO (SAMPLE + 1)
-        sample = ((img_tensor) * 127.5).clamp(0, 255).to(torch.uint8)
+        sample = ((img_tensor) * 255).clamp(0, 255).to(torch.uint8)
         sample = sample.permute(1, 2, 0)
         sample = sample.contiguous()
 
@@ -67,8 +67,8 @@ def generate_npz_file(dataset, npz_filename):
     print(f"Data saved to {npz_filename}")
 
 # Save training and testing images
-# save_images(train_dataset, "train")
-# save_images(test_dataset, "test")
+save_images(train_dataset, "train")
+save_images(test_dataset, "test")
 
 # Generate NPZ file for training data
 generate_npz_file(train_dataset, os.path.join(data_dir, "mnist_train_reference.npz"))

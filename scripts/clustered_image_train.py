@@ -68,6 +68,7 @@ def main():
         num_samples_visualize=args.num_samples_visualize,
         use_ddim=args.use_ddim,
         image_size=args.image_size,
+        training_data_inception_mu_sigma_path=args.training_data_inception_mu_sigma_path,
         use_wandb=args.use_wandb,
     ).run_loop()
 
@@ -93,6 +94,7 @@ def create_argparser():
         fp16_scale_growth=1e-3,
         random_crop=False,
         random_flip=False,
+        training_data_inception_mu_sigma_path="",
         use_wandb=True,
     )
     # Sampling arguments for visualization during training
