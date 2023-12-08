@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
-from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, LossSecondMomentResamplerAfterSameT
+from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, LossSecondMomentResamplerAfterSameT, SameTSampler, AlternateSampler
 from .script_util import NUM_CLASSES
 from .clustered_model import ClusteredModel
 from sklearn.decomposition import PCA
@@ -47,7 +47,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
-        no_guidance_step=2000,
+        no_guidance_step=200000000,
         # Sampling arguments for visualization during training
         clip_denoised=True,
         num_samples_visualize=25,
@@ -209,14 +209,14 @@ class TrainLoop:
             ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
 
         # Setting the limits of the plot
-        ax.set_xlim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
-        ax.set_ylim(np.min(reduced_means) - 3*np.max(sigmas), np.max(reduced_means) + 3*np.max(sigmas))
+        ax.set_xlim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
+        ax.set_ylim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
 
         # Add grid, labels and title
         ax.grid(True)
         ax.set_xlabel('X-axis')
         ax.set_ylabel('Y-axis')
-        ax.set_title('Contours of Multiple 1D Gaussian Distributions')
+        ax.set_title('Contours of 2D Gaussian Distributions')
 
         return fig
 
@@ -306,7 +306,16 @@ class TrainLoop:
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
 
-            no_guidance = self.step > self.no_guidance_step
+            if isinstance(self.schedule_sampler, UniformSampler) or isinstance(self.schedule_sampler, LossSecondMomentResampler):
+                # For baseline samplers, setting no_guidance to False. This is in fact a no-op; but just for safety
+                no_guidance = False
+            elif isinstance(self.schedule_sampler, SameTSampler) or isinstance(self.schedule_sampler, LossSecondMomentResamplerAfterSameT):
+                # For clustered diffusion, settting no_guidance based on no_guidance_step parameter
+                no_guidance = self.step > self.no_guidance_step
+            elif isinstance(self.schedule_sampler, AlternateSampler):
+                # For clustered diffusion, setting this alternatively based on step number
+                no_guidance = (self.step > self.no_guidance_step) or (self.step % 2)
+
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), no_guidance=no_guidance)
 
             compute_losses = functools.partial(
