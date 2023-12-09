@@ -263,33 +263,39 @@ class TrainLoop:
 
                     with th.no_grad():
                         # Generate samples
-                        sample_fn = (
-                            self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
-                        )
-                        # y = th.randint(low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev())
-                        # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
-                        y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
-                        model_kwargs = {'y': y}
-                        generated_samples = sample_fn(
-                            self.ddp_model,
-                            (self.num_samples_visualize, 3, self.image_size, self.image_size),
-                            clip_denoised=self.clip_denoised,
-                            model_kwargs=model_kwargs,
-                        )
-                        # Normalize samples to [0, 255] and change to uint8
-                        samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
-                        # Rearrange the tensor to be in HWC format for image saving
-                        samples = samples.permute(0, 2, 3, 1)
-                        samples = samples.contiguous().cpu().numpy()
-                        image_list = [sample for sample in samples]
-                        collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
-
-                        wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
-
+                        fid_samples = None
+                        for i in range(0,2):
+                            sample_fn = (
+                                self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
+                            )
+                            # y = th.randint(low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev())
+                            # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
+                            y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
+                            model_kwargs = {'y': y}
+                            generated_samples = sample_fn(
+                                self.ddp_model,
+                                (self.num_samples_visualize, 3, self.image_size, self.image_size),
+                                clip_denoised=self.clip_denoised,
+                                model_kwargs=model_kwargs,
+                            )
+                            # Normalize samples to [0, 255] and change to uint8
+                            samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                            # Rearrange the tensor to be in HWC format for image saving
+                            samples = samples.permute(0, 2, 3, 1).contiguous()
+                            if fid_samples == None:
+                                fid_samples = samples
+                            else:
+                                fid_samples = th.cat((fid_samples, samples), dim=0)
+                            if i==0:
+                                samples = samples.cpu().numpy()
+                                image_list = [sample for sample in samples]
+                                collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
+                                wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
                         # Compute FID Score for the generated images
+                        print("FID samples shape:", fid_samples.shape())
                         if self.training_data_inception_mu_sigma_path != "":
                             print("Calculating FID Score!")
-                            generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(samples, self.inception_model, batch_size=128, device=dist_util.dev())
+                            generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples, self.inception_model, batch_size=128, device=dist_util.dev())
                             fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
                             # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
                             wandb_log_images["FID"] = fid_value
