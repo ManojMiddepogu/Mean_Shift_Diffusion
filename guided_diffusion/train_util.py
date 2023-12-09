@@ -259,6 +259,8 @@ class TrainLoop:
                 if dist.get_rank() == 0:  # Make sure only the master process does the sampling
                     self.ddp_model.eval()
 
+                    wandb_log_images = {}
+
                     with th.no_grad():
                         # Generate samples
                         sample_fn = (
@@ -282,8 +284,7 @@ class TrainLoop:
                         image_list = [sample for sample in samples]
                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
 
-                        if self.use_wandb:
-                            wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]}, step = self.step)
+                        wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
 
                         # Compute FID Score for the generated images
                         if self.training_data_inception_mu_sigma_path != "":
@@ -291,7 +292,7 @@ class TrainLoop:
                             generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(samples, self.inception_model, batch_size=128, device=dist_util.dev())
                             fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
                             # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
-                            wandb.log({"FID": fid_value})
+                            wandb_log_images["FID"] = fid_value
                             print(f"Calculated FID Score - {fid_value}!")
                         
                         # Plot Gaussians at the last time step for all classes if Clustered Model
@@ -304,7 +305,10 @@ class TrainLoop:
 
                             mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
                             gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
-                            wandb.log({"Gaussian 2D Plots": [wandb.Image(gaussian_image, caption="Gaussian 2D plot")]}, step = self.step)
+                            wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
+                        
+                        if self.use_wandb:
+                            wandb.log(wandb_log_images, step=self.step)
                         
                     self.ddp_model.train()
                 
