@@ -17,11 +17,13 @@ source /ext3/env.sh
 cd /scratch/crg9968/llvm/Clustered_Diffusion
 conda activate diffusion2
 
-OPENAI_LOGDIR=/scratch/crg9968/llvm/logs_test_run_cifar10_uniform_mu0sigma1 GPUS_PER_NODE=1 \
-python3 scripts/clustered_image_train.py --data_dir /scratch/crg9968/datasets/cifar10 --random_flip True \
- --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 --class_cond True --schedule_sampler uniform \
- --sigma_small True --diffusion_steps 1000 --noise_schedule linear --guidance_loss_type JS --denoise_loss_type MSE \
- --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 10001 --no_guidance_step 2000 --save_interval 1000 \
- --clip_denoised True --num_samples_visualize 100 --use_ddim False \
- --mu0sigma1 True
+OPENAI_LOGDIR=/scratch/crg9968/llvm/logs GPUS_PER_NODE=1 \
+python3 scripts/clustered_image_train.py \
+ --data_dir /scratch/crg9968/datasets/cifar10 --random_flip True \
+ --training_data_inception_mu_sigma_path /scratch/crg9968/datasets/cifar10/cifar_train_mu_sigma.npz \
+ --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 \
+ --class_cond True --schedule_sampler alternate --distance 0.1 --scale_distance True \
+ --sigma_small True --diffusion_steps 500 --noise_schedule linear --guidance_loss_type JS --denoise_loss_type MSE \
+ --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 10001 --no_guidance_step 4000 --save_interval 1000 \
+ --clip_denoised True --num_samples_visualize 100 --use_ddim False
 "

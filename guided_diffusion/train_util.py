@@ -210,31 +210,37 @@ class TrainLoop:
 
         return collage
     
-    def _plot_multiple_gaussian_contours(self, means, sigmas):
-        # Convert inputs to numpy arrays if they are not already
-        means = np.array(means.view(10, -1).to('cpu'))
-        sigmas = np.array(sigmas.view(10, -1).to('cpu'))
-        reduced_means = PCA(n_components=2).fit_transform(means)
+    def _plot_multiple_gaussian_contours(self, means, sigmas, plot_t):
+        # Create a row of subplots
+        fig, axes = plt.subplots(nrows=1, ncols=11, figsize=(11 * 4, 4))
 
-        # Create a figure and axis
-        fig, ax = plt.subplots()
+        for i in range(0, means.shape[0], NUM_CLASSES):
+            mu_batch = means[i:i + NUM_CLASSES]
+            sigma_batch = sigmas[i:i + NUM_CLASSES]
 
-        # Plot circles for each Gaussian distribution
-        for index, (mean, sigma) in enumerate(zip(reduced_means, sigmas)):
-            ellipse = Ellipse(xy=mean, width=6 * sigma, height=6 * sigma, edgecolor='r', fc='None', lw=2)
-            ax.add_patch(ellipse)
-            ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
+            # Convert inputs to numpy arrays if they are not already
+            mu_batch = np.array(mu_batch.view(10, -1).to('cpu'))
+            sigma_batch = np.array(sigma_batch.view(10, -1).to('cpu'))
+            reduced_means = PCA(n_components=2).fit_transform(mu_batch)
 
-        # Setting the limits of the plot
-        ax.set_xlim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
-        ax.set_ylim(np.min(reduced_means) - 6*np.max(sigmas), np.max(reduced_means) + 6*np.max(sigmas))
+            ax = axes[i // NUM_CLASSES]
+            # Plot circles for each Gaussian distribution
+            for index, (mean, sigma) in enumerate(zip(reduced_means, sigma_batch)):
+                ellipse = Ellipse(xy=mean, width=6 * sigma, height=6 * sigma, edgecolor='r', fc='None', lw=2)
+                ax.add_patch(ellipse)
+                ax.text(mean[0], mean[1], str(index), color='black', ha='center', va='center', fontsize=10)
 
-        # Add grid, labels and title
-        ax.grid(True)
-        ax.set_xlabel('X-axis')
-        ax.set_ylabel('Y-axis')
-        ax.set_title('Contours of 2D Gaussian Distributions')
+            # Setting the limits of the plot
+            ax.set_xlim(np.min(reduced_means) - 6*np.max(sigma_batch), np.max(reduced_means) + 6*np.max(sigma_batch))
+            ax.set_ylim(np.min(reduced_means) - 6*np.max(sigma_batch), np.max(reduced_means) + 6*np.max(sigma_batch))
 
+            # Add grid, labels, and title to each subplot
+            ax.grid(True)
+            ax.set_xlabel('X-axis')
+            ax.set_ylabel('Y-axis')
+            ax.set_title(f'Gaussian {plot_t[i].item()}')
+
+        plt.tight_layout()
         return fig
 
     def run_loop(self):
@@ -252,8 +258,6 @@ class TrainLoop:
                 # Sample num_samples_visualize images everytime we save the model
                 if dist.get_rank() == 0:  # Make sure only the master process does the sampling
                     self.ddp_model.eval()
-
-                    wandb_log_images = {}
 
                     with th.no_grad():
                         # Generate samples
@@ -278,7 +282,8 @@ class TrainLoop:
                         image_list = [sample for sample in samples]
                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
 
-                        wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
+                        if self.use_wandb:
+                            wandb.log({"Sampled Images": [wandb.Image(collage, caption="Sampled Images")]}, step = self.step)
 
                         # Compute FID Score for the generated images
                         if self.training_data_inception_mu_sigma_path != "":
@@ -286,22 +291,20 @@ class TrainLoop:
                             generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(samples, self.inception_model, batch_size=128, device=dist_util.dev())
                             fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
                             # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
-                            wandb_log_images["FID"] = fid_value
+                            wandb.log({"FID": fid_value})
                             print(f"Calculated FID Score - {fid_value}!")
                         
                         # Plot Gaussians at the last time step for all classes if Clustered Model
                         if isinstance(self.ddp_model.module, ClusteredModel):
-                            y = th.arange(NUM_CLASSES, device=dist_util.dev())
-                            plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
+                            y = th.arange(NUM_CLASSES, device=dist_util.dev()).repeat(10 + 1)
+                            plot_t = th.cat((th.arange(start = 0, end = self.diffusion.num_timesteps, step = self.diffusion.num_timesteps / 10, device = dist_util.dev()), th.tensor([self.diffusion.num_timesteps - 1], device=dist_util.dev()))).repeat_interleave(NUM_CLASSES).long()
+                            # y = th.arange(NUM_CLASSES, device=dist_util.dev())
+                            # plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
                             model_kwargs = {"y": y}
 
                             mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
-                            gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar)
-
-                            wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
-                        
-                        if self.use_wandb:
-                            wandb.log(wandb_log_images)
+                            gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
+                            wandb.log({"Gaussian 2D Plots": [wandb.Image(gaussian_image, caption="Gaussian 2D plot")]}, step = self.step)
                         
                     self.ddp_model.train()
                 
@@ -383,7 +386,7 @@ class TrainLoop:
                 if self.use_wandb:
                     wandb_log_data = {**step_values, **logged_data}
                     wandb_log_data["t"] = t.mean(dtype = th.float)
-                    wandb.log(wandb_log_data)
+                    wandb.log(wandb_log_data, step=self.step)
             self.mp_trainer.backward(loss)
 
     def _update_ema(self):

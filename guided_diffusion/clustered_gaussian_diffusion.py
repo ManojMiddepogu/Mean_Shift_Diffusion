@@ -111,6 +111,7 @@ class ClusteredGaussianDiffusion:
         denoise_loss_type,
         distance,
         rescale_timesteps=False,
+        scale_distance = False,
         mu0sigma1=False,
     ):
         self.model_mean_type = model_mean_type
@@ -123,6 +124,7 @@ class ClusteredGaussianDiffusion:
         self.denoise_loss_type = denoise_loss_type
         self.distance = distance
         self.rescale_timesteps = rescale_timesteps
+        self.scale_distance = scale_distance
         self.mu0sigma1 = mu0sigma1
 
         # Use float64 for accuracy.
@@ -471,31 +473,39 @@ class ClusteredGaussianDiffusion:
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
 
-        # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
-        if no_guidance:
-            with th.no_grad():
-                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
-        else:
-            mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
-        # CHECK - for t==0, i.e., t-1 < 0; mu_bar and sigma_bar should be ideally 0.
-            # CHECK - IN THIS CASE ARE THE MODEL GIVEN VALUES USED ANYWHERE? THEY SHOULD DEFINITELY NOT BE USED IN GRADIENT COMPUTATION.....
-        # THIS SHOULD BE sqrt_one_minus_alphas_cumprod AND NOT sqrt_one_minus_alphas_cumprod_prev, SINCE I AM PASSING t-1 AS INPUT. SAME GOES FOR OTHER PLACES AS WELL.
-        if no_guidance:
-            with th.no_grad():
-                mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
-        else:
-            mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
+        mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
         mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
         t_is_zero = (t == 0)
         if t_is_zero.any():
             t_incremented = th.where(t_is_zero, t+1, t)
-            # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0 IN q_posterior_variance
-            # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
-            if no_guidance:
-                with th.no_grad():
-                    mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
-            else:
-                mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+            mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+
+        # # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
+        # if no_guidance:
+        #     with th.no_grad():
+        #         mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+        # else:
+        #     mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+        # # CHECK - for t==0, i.e., t-1 < 0; mu_bar and sigma_bar should be ideally 0.
+        #     # CHECK - IN THIS CASE ARE THE MODEL GIVEN VALUES USED ANYWHERE? THEY SHOULD DEFINITELY NOT BE USED IN GRADIENT COMPUTATION.....
+        # # THIS SHOULD BE sqrt_one_minus_alphas_cumprod AND NOT sqrt_one_minus_alphas_cumprod_prev, SINCE I AM PASSING t-1 AS INPUT. SAME GOES FOR OTHER PLACES AS WELL.
+        # if no_guidance:
+        #     with th.no_grad():
+        #         mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
+        # else:
+        #     mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
+        # mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
+        # t_is_zero = (t == 0)
+        # if t_is_zero.any():
+        #     t_incremented = th.where(t_is_zero, t+1, t)
+        #     # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0 IN q_posterior_variance
+        #     # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
+        #     if no_guidance:
+        #         with th.no_grad():
+        #             mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+        #     else:
+        #         mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
@@ -536,35 +546,10 @@ class ClusteredGaussianDiffusion:
                 distance_diff = distance_matrix_diff.min(dim=1).values
                 distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
 
-                terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance))
-
-                # labels = y['y']
-                # b = labels.shape[0]
-                
-                # # Expand labels for comparison
-                # labels_expanded = labels.view(b, 1).expand(b, b)
-                # same_class_mask = labels_expanded.eq(labels_expanded.t())
-                # diff_class_mask = ~same_class_mask
-
-                # # CHECK - DO WE MASK OUT SELF EXAMPLES?
-
-                # # Randomly select indices for same and different classes
-                # same_class_indices = [th.masked_select(th.arange(b), same_class_mask[i]) for i in range(b)]
-                # diff_class_indices = [th.masked_select(th.arange(b), diff_class_mask[i]) for i in range(b)]
-
-                # same_class_indices = [random.choice(indices) for indices in same_class_indices]
-                # diff_class_indices = [random.choice(indices) for indices in diff_class_indices]
-
-                # same_class_mean = q_mean[same_class_indices]
-                # same_class_log_variance = q_log_variance[same_class_indices]
-                # diff_class_mean = q_mean[diff_class_indices]
-                # diff_class_log_variance = q_log_variance[diff_class_indices]
-
-                # js_same = mean_flat(normal_js(q_mean, q_log_variance, same_class_mean, same_class_log_variance))
-                # js_diff = mean_flat(normal_js(q_mean, q_log_variance, diff_class_mean, diff_class_log_variance))
-
-                # # CHECK - TRIPLET LOSS MIN DISTANCE?? 1??
-                # terms["guidance_loss"] += th.mean(th.nn.functional.relu(js_same - js_diff + 1))
+                if self.scale_distance:
+                    terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance * _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, t.shape)))
+                else:                    
+                    terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance))
             else:
                 raise NotImplementedError(self.guidance_loss_type)
 
