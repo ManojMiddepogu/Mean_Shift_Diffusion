@@ -80,9 +80,10 @@ def clustered_diffusion_defaults():
         timestep_respacing="",
         guidance_loss_type="JS", # "JS", "WD"
         denoise_loss_type="MSE", # "MSE", "ReMSE", "KL", "ReKL"
-        distance=6,
+        distance=6.0,
         predict_xstart=False, # CHECK - HAS TO BE FALSE, TRUE NOT SUPPORTED
         rescale_timesteps=False,
+        scale_distance=False,
         mu0sigma1=False
     )
 
@@ -256,6 +257,7 @@ def create_clustered_model_and_diffusion(
     resblock_updown,
     use_fp16,
     use_new_attention_order,
+    scale_distance,
     mu0sigma1
 ):
     model = create_clustered_model(
@@ -288,6 +290,7 @@ def create_clustered_model_and_diffusion(
         predict_xstart=predict_xstart,
         rescale_timesteps=rescale_timesteps,
         timestep_respacing=timestep_respacing,
+        scale_distance=scale_distance,
         mu0sigma1=mu0sigma1
     )
     return model, diffusion
@@ -610,6 +613,7 @@ def create_clustered_gaussian_diffusion(
     predict_xstart=False,
     rescale_timesteps=False,
     timestep_respacing="",
+    scale_distance=False,
     mu0sigma1=False,
 ):
     if predict_xstart:
@@ -650,6 +654,7 @@ def create_clustered_gaussian_diffusion(
         denoise_loss_type=denoise_loss_type,
         distance=distance,
         rescale_timesteps=rescale_timesteps,
+        scale_distance=scale_distance,
         mu0sigma1=mu0sigma1,
     )
 

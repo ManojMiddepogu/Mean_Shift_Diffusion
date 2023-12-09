@@ -22,7 +22,7 @@ python3 scripts/clustered_image_train.py \
  --data_dir /scratch/crg9968/datasets/mnist/train \
  --training_data_inception_mu_sigma_path /scratch/crg9968/datasets/mnist/mnist_train_mu_sigma.npz \
  --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 \
- --class_cond True --schedule_sampler alternate --distance 1 \
+ --class_cond True --schedule_sampler alternate --distance 0.1 --scale_distance True \
  --sigma_small True --diffusion_steps 500 --noise_schedule linear --guidance_loss_type JS --denoise_loss_type MSE \
  --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 10001 --no_guidance_step 4000 --save_interval 1000 \
  --clip_denoised True --num_samples_visualize 100 --use_ddim False

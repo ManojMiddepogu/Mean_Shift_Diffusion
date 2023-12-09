@@ -19,6 +19,6 @@ conda activate diffusion2
 
 python3 scripts/compute_fid_score.py \
  --batch-size 128 --save-stats \
- /scratch/crg9968/datasets/mnist/mnist_train_reference.npz\
- /scratch/crg9968/datasets/mnist/mnist_train_mu_sigma.npz
+ /scratch/crg9968/datasets/cifar10/cifar_train_reference.npz\
+ /scratch/crg9968/datasets/cifar10/cifar_train_mu_sigma.npz
 "
