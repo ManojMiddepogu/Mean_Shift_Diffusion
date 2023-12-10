@@ -26,6 +26,7 @@ def main():
         wandb.init(
             entity = "llvm",
             config = args,
+            name = args.wandb_run_name,
         )
 
     logger.log("creating model and diffusion...")
@@ -102,6 +103,7 @@ def create_argparser():
         random_flip=False,
         training_data_inception_mu_sigma_path="",
         use_wandb=True,
+        wandb_run_name="wandb_run_name",
     )
     # Sampling arguments for visualization during training
     defaults.update(dict(
