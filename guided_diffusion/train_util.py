@@ -227,8 +227,8 @@ class TrainLoop:
             sigma_batch = sigmas[i:i + NUM_CLASSES]
 
             # Convert inputs to numpy arrays if they are not already
-            mu_batch = np.array(mu_batch.view(10, -1).to('cpu'))
-            sigma_batch = np.array(sigma_batch.view(10, -1).to('cpu'))
+            mu_batch = np.array(mu_batch.view(NUM_CLASSES, -1).to('cpu'))
+            sigma_batch = np.array(sigma_batch.view(NUM_CLASSES, -1).to('cpu'))
             reduced_means = PCA(n_components=2).fit_transform(mu_batch)
 
             ax = axes[i // NUM_CLASSES]
