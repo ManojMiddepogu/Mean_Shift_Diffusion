@@ -460,8 +460,7 @@ class ClusteredGaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
     
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, no_guidance=False):
-        # CHECK - LOSS IS NOT IMPLEMENTED YET.
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, loss_flags={}):
         y = model_kwargs['y']
         if model_kwargs is None:
             model_kwargs = {}
@@ -473,45 +472,27 @@ class ClusteredGaussianDiffusion:
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
 
-        mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
-        mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
-        mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
-        t_is_zero = (t == 0)
-        if t_is_zero.any():
-            t_incremented = th.where(t_is_zero, t+1, t)
-            mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
-
-        # # CHECK - _broadcast_tensor(), BETTER TO BROADCAST SIGMA HERE ITSELF? RATHER THAN IN FUNCTIONS?
-        # if no_guidance:
-        #     with th.no_grad():
-        #         mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
-        # else:
-        #     mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
-        # # CHECK - for t==0, i.e., t-1 < 0; mu_bar and sigma_bar should be ideally 0.
-        #     # CHECK - IN THIS CASE ARE THE MODEL GIVEN VALUES USED ANYWHERE? THEY SHOULD DEFINITELY NOT BE USED IN GRADIENT COMPUTATION.....
-        # # THIS SHOULD BE sqrt_one_minus_alphas_cumprod AND NOT sqrt_one_minus_alphas_cumprod_prev, SINCE I AM PASSING t-1 AS INPUT. SAME GOES FOR OTHER PLACES AS WELL.
-        # if no_guidance:
-        #     with th.no_grad():
-        #         mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
-        # else:
-        #     mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
-        # mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
-        # t_is_zero = (t == 0)
-        # if t_is_zero.any():
-        #     t_incremented = th.where(t_is_zero, t+1, t)
-        #     # CHECK - INCREMENTING t ONLY FOR t==0, NOTE THIS IS WRONG FOR CASES WHERE T is NOT 0, BUT THIS IS NOT AN ISSUE AS WE ONLY USE THE INDICES WHERE t==0 IN q_posterior_variance
-        #     # CHECK - ALSO I AM DOING THIS BECAUSE USING T+1 FOR THE WHOLE THING IS CAUSING OUT OF BOUNDS ISSUE IN RESPACE.PY FILE FOR THE MAP[ts]
-        #     if no_guidance:
-        #         with th.no_grad():
-        #             mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
-        #     else:
-        #         mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+        if loss_flags["guidance_model_freeze"]:
+            with th.no_grad():
+                mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+                mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
+                mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
+                t_is_zero = (t == 0)
+                if t_is_zero.any():
+                    t_incremented = th.where(t_is_zero, t+1, t)
+                    mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+        else:
+            mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
+            mu_bar_y_tm1, sigma_bar_y_tm1 = guidance_model(t-1, self.sqrt_one_minus_alphas_cumprod, y)
+            mu_bar_y_tp1, sigma_bar_y_tp1 = (None, None)
+            t_is_zero = (t == 0)
+            if t_is_zero.any():
+                t_incremented = th.where(t_is_zero, t+1, t)
+                mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
-        # CHECK - ADD GUIDANCE TRIPLET LOSS USING THE ABOVE VALUES
         terms["guidance_loss"] = 0.0
-        # if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
-        if not no_guidance and self.mu0sigma1 is False:
+        if not loss_flags["guidance_loss_freeze"] and self.mu0sigma1 is False:
             if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
                 b, *shape = q_mean.shape
 
@@ -554,24 +535,12 @@ class ClusteredGaussianDiffusion:
                 raise NotImplementedError(self.guidance_loss_type)
 
         x_t = self.q_sample(x_start, t, mu_bar_y_t, sigma_bar_y_t, noise)
-        if self.denoise_loss_type == ClusteredDenoiseLossType.KL or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_KL:
-            terms["denoise_loss"] = self._vb_terms_bpd(
-                model=model,
-                x_start=x_start,
-                x_t=x_t,
-                t=t,
-                mu_bar_y_t=mu_bar_y_t,
-                mu_bar_y_tm1=mu_bar_y_tm1,
-                sigma_bar_y_t=sigma_bar_y_t,
-                sigma_bar_y_tm1=sigma_bar_y_tm1,
-                sigma_bar_y_tp1=sigma_bar_y_tp1,
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-            )["output"]
-            if self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_KL:
-                terms["denoise_loss"] *= self.num_timesteps
-        elif self.denoise_loss_type == ClusteredDenoiseLossType.MSE or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_MSE:
-            model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
+        if self.denoise_loss_type == ClusteredDenoiseLossType.MSE or self.denoise_loss_type == ClusteredDenoiseLossType.RESCALED_MSE:
+            if loss_flags["denoise_model_freeze"]:
+                with th.no_grad():
+                    model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
+            else:
+                model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
 
             if self.model_var_type not in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
                 raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
@@ -583,11 +552,14 @@ class ClusteredGaussianDiffusion:
                 ClusteredModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-            terms["denoise_mse"] = mean_flat((target - model_output) ** 2)
-            if "vb" in terms: # CHECK - THIS TERM DOESN'T EXIST UNLESS WE LEARN SIGMA CASE? HOW IS THIS APPLICABLE IN OUR CASE? WE ARE LEARNING SIGMS IN SOME SENSE?
-                terms["denoise_loss"] = terms["denoise_mse"] + terms["vb"]
+            if loss_flags["denoise_loss_freeze"]:
+                terms["denoise_loss"] = 0.0
             else:
-                terms["denoise_loss"] = terms["denoise_mse"]
+                terms["denoise_loss"] = mean_flat((target - model_output) ** 2)
+            # if "vb" in terms: # CHECK - THIS TERM DOESN'T EXIST UNLESS WE LEARN SIGMA CASE? HOW IS THIS APPLICABLE IN OUR CASE? WE ARE LEARNING SIGMS IN SOME SENSE?
+            #     terms["denoise_loss"] = terms["denoise_mse"] + terms["vb"]
+            # else:
+            #     terms["denoise_loss"] = terms["denoise_mse"]
         else:
             raise NotImplementedError(self.denoise_loss_type)
 
