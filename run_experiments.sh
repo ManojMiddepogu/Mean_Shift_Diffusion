@@ -16,24 +16,23 @@ gantype_scheduler="gantype"
 
 # Baseline
 sbatch ./baseline_cifar_job.slurm "/scratch/crg9968/llvm/logs_0" $data_dir $training_data_inception_mu_sigma_path \
-    $uniform_scheduler $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size "baseline, cifar, 50K, uniform"
-
+    $uniform_scheduler $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size "baseline_cifar_50K_uniform"
 # Clustered, Alternate, Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_1" $data_dir $training_data_inception_mu_sigma_path $distance \
     $alternate_scheduler $no_guidance_step "True" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered, cifar, 50K, alternate, freeze"
+    "clustered_cifar_50K_alternate_freeze"
 
-# # Clustered, Alternate, No Freeze
-# sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_2" $data_dir $training_data_inception_mu_sigma_path $distance \
-#     $alternate_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-#     "clustered, cifar, 50K, alternate, no freeze"
+# Clustered, Alternate, No Freeze
+sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_2" $data_dir $training_data_inception_mu_sigma_path $distance \
+    $alternate_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
+    "clustered_cifar_50K_alternate_no freeze"
 
 # Clustered, GANType, Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_3" $data_dir $training_data_inception_mu_sigma_path $distance \
     $gantype_scheduler $no_guidance_step "True" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered, cifar, 50K, gantype, freeze"
+    "clustered_cifar_50K_gantype_freeze"
 
-# # Clustered, GANType, No Freeze
-# sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_4" $data_dir $training_data_inception_mu_sigma_path $distance \
-#     $gantype_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-#     "clustered, cifar, 50K, gantype, no freeze"
+# Clustered, GANType, No Freeze
+sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_4" $data_dir $training_data_inception_mu_sigma_path $distance \
+    $gantype_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
+    "clustered_cifar_50K_gantype_no freeze"
