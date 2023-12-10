@@ -491,6 +491,9 @@ class ClusteredGaussianDiffusion:
                 mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
+        
+        terms["model_mean"] =  mean_flat(mu_bar_y_t**2).mean()
+
         terms["guidance_loss"] = 0.0
         if not loss_flags["guidance_loss_freeze"] and self.mu0sigma1 is False:
             if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:

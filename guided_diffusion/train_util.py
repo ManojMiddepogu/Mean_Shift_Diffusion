@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
-from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, SameTSampler, AlternateSampler
+from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, SameTSampler, AlternateSampler, GANTypeSampler
 from .script_util import NUM_CLASSES
 from .clustered_model import ClusteredModel
 from sklearn.decomposition import PCA
@@ -273,16 +273,17 @@ class TrainLoop:
                         # Generate samples
                         fid_samples = None
                         run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
-                        for i in range(0, run_num_samples // self.num_samples_batch_size):
+                        run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                        for i in range(0, run_num_samples // run_samples_batch_size):
                             print(f"Sampling {run_num_samples} Images for batch number {i} out of {run_num_samples // self.num_samples_batch_size} batches!")
                             sample_fn = (
                                 self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
                             )
-                            y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
+                            y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
                             model_kwargs = {'y': y}
                             generated_samples = sample_fn(
                                 self.ddp_model,
-                                (self.num_samples_batch_size, 3, self.image_size, self.image_size),
+                                (run_samples_batch_size, 3, self.image_size, self.image_size),
                                 clip_denoised=self.clip_denoised,
                                 model_kwargs=model_kwargs,
                             )
@@ -398,6 +399,29 @@ class TrainLoop:
                     else:
                         guidance_model_freeze = False
                         denoise_model_freeze = False
+                        guidance_loss_freeze = False
+                        denoise_loss_freeze = False
+                        sample_condition = "same"
+            elif isinstance(self.schedule_sampler, GANTypeSampler):
+                if self.step >= self.no_guidance_step:
+                    if self.freeze_guidance_after_no_guidance_step:
+                        guidance_model_freeze = True
+                    else:
+                        guidance_model_freeze = False
+                    denoise_model_freeze = False
+                    guidance_loss_freeze = True
+                    denoise_loss_freeze = False
+                    sample_condition = "not-same"
+                else:
+                    if self.step % 2:
+                        guidance_model_freeze = True
+                        denoise_model_freeze = False
+                        guidance_loss_freeze = True
+                        denoise_loss_freeze = False
+                        sample_condition = "not-same"
+                    else:
+                        guidance_model_freeze = False
+                        denoise_model_freeze = True
                         guidance_loss_freeze = False
                         denoise_loss_freeze = False
                         sample_condition = "same"

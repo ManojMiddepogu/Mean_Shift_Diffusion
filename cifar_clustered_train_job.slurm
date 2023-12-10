@@ -24,7 +24,7 @@ python3 scripts/clustered_image_train.py \
  --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 \
  --diffusion_steps 1000 --noise_schedule linear --class_cond True --sigma_small True \
  --guidance_loss_type JS --denoise_loss_type MSE --distance 0.1 --scale_distance True \
- --schedule_sampler alternate --no_guidance_step 4000 --freeze_guidance_after_no_guidance_step False \
- --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 50001 --save_interval 1000 --fid_interval 5000 \
+ --schedule_sampler gantype --no_guidance_step 4000 --freeze_guidance_after_no_guidance_step False \
+ --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 50001 --save_interval 1000 --fid_interval 2000 \
  --clip_denoised True --num_samples 1000 --num_samples_batch_size 500 --num_samples_visualize 100 --use_ddim False
 "

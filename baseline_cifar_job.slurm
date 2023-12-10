@@ -23,7 +23,7 @@ python3 scripts/image_train.py \
  --training_data_inception_mu_sigma_path /scratch/crg9968/datasets/cifar10/cifar_train_mu_sigma.npz \
  --image_size 32 --num_channels 64 --num_res_blocks 2 --attention_resolutions "16,8" --dropout 0.1 \
  --diffusion_steps 1000 --noise_schedule linear --class_cond True \
- --schedule_sampler uniform --no_guidance_step 40000000 --freeze_guidance_after_no_guidance_step False \
- --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 50001 --save_interval 1000 --fid_interval 5000 \
+ --schedule_sampler uniform --no_guidance_step 40000000 --freeze_guidance_after_no_guidance_step True \
+ --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps 50001 --save_interval 1000 --fid_interval 2000 \
  --clip_denoised True --num_samples 1000 --num_samples_batch_size 500 --num_samples_visualize 100 --use_ddim False
 "

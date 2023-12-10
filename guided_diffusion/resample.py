@@ -20,6 +20,8 @@ def create_named_schedule_sampler(name, diffusion):
         return SameTSampler(diffusion)
     elif name == "alternate":
         return AlternateSampler(diffusion)
+    elif name == "gantype":
+        return GANTypeSampler(diffusion)
     else:
         raise NotImplementedError(f"unknown schedule sampler: {name}")
 
@@ -102,6 +104,36 @@ class SameTSampler(ScheduleSampler):
 
 
 class AlternateSampler(ScheduleSampler):
+    def __init__(self, diffusion):
+        self.diffusion = diffusion
+        self._weights = np.ones([diffusion.num_timesteps])
+
+    def weights(self):
+        return self._weights
+    
+    def sample(self, batch_size, device, loss_flags = {}):
+        sample_condition = loss_flags.get("sample_condition")
+        if sample_condition == "not-same":
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(batch_size,), p=p)
+            indices = th.from_numpy(indices_np).long().to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.from_numpy(weights_np).float().to(device)
+        elif sample_condition == "same":
+            w = self.weights()
+            p = w / np.sum(w)
+            indices_np = np.random.choice(len(p), size=(1,), p=p)
+            indices = th.full((batch_size,), indices_np[0], dtype=th.long).to(device)
+            weights_np = 1 / (len(p) * p[indices_np])
+            weights = th.full((batch_size,), weights_np[0], dtype=th.float).to(device)
+        else:
+            raise NotImplementedError(f"unknown sample_condition: {sample_condition}")
+        
+        return indices, weights
+
+
+class GANTypeSampler(ScheduleSampler):
     def __init__(self, diffusion):
         self.diffusion = diffusion
         self._weights = np.ones([diffusion.num_timesteps])
