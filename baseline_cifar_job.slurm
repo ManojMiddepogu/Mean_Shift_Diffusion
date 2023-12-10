@@ -21,6 +21,7 @@ save_interval=$6
 fid_interval=$7
 num_samples=$8
 num_samples_batch_size=$9
+wandb_run_name=${10}
 
 singularity exec --bind /scratch --nv --overlay /scratch/crg9968/llvm/overlay-25GB-500K.ext3:ro /scratch/crg9968/llvm/cuda11.8.86-cudnn8.7-devel-ubuntu22.04.2.sif /bin/bash  -c "
 source /ext3/env.sh
@@ -35,5 +36,6 @@ python3 scripts/image_train.py \
  --diffusion_steps 1000 --noise_schedule linear --class_cond True \
  --schedule_sampler ${schedule_sampler} --no_guidance_step 40000000 --freeze_guidance_after_no_guidance_step True \
  --lr 1e-4 --weight_decay 0.0 --batch_size 128 --lr_anneal_steps ${lr_anneal_steps} --save_interval ${save_interval} --fid_interval ${fid_interval} \
- --clip_denoised True --num_samples ${num_samples} --num_samples_batch_size ${num_samples_batch_size} --num_samples_visualize 100 --use_ddim False
+ --clip_denoised True --num_samples ${num_samples} --num_samples_batch_size ${num_samples_batch_size} --num_samples_visualize 100 --use_ddim False \
+ --wandb_run_name ${wandb_run_name}
 "
