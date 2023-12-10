@@ -56,14 +56,19 @@ def main():
         ema_rate=args.ema_rate,
         log_interval=args.log_interval,
         save_interval=args.save_interval,
+        fid_interval=args.fid_interval,
         resume_checkpoint=args.resume_checkpoint,
         use_fp16=args.use_fp16,
         fp16_scale_growth=args.fp16_scale_growth,
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        no_guidance_step=args.no_guidance_step,
+        freeze_guidance_after_no_guidance_step=args.freeze_guidance_after_no_guidance_step,
         # Sampling arguments for visualization during training
         clip_denoised=args.clip_denoised,
+        num_samples=args.num_samples,
+        num_samples_batch_size=args.num_samples_batch_size,
         num_samples_visualize=args.num_samples_visualize,
         use_ddim=args.use_ddim,
         image_size=args.image_size,
@@ -82,11 +87,14 @@ def create_argparser():
         lr=1e-4,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        no_guidance_step=200000000,
+        freeze_guidance_after_no_guidance_step=True,
         batch_size=1,
         microbatch=-1,  # -1 disables microbatches
         ema_rate="0.9999",  # comma-separated list of EMA values
         log_interval=10,
-        save_interval=10000,
+        save_interval=1000,
+        fid_interval=10000,
         resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,
@@ -98,7 +106,9 @@ def create_argparser():
     # Sampling arguments for visualization during training
     defaults.update(dict(
         clip_denoised=True,
-        num_samples_visualize=25,
+        num_samples=400,
+        num_samples_batch_size=200,
+        num_samples_visualize=100,
         use_ddim=False,
     ))
     defaults.update(model_and_diffusion_defaults())

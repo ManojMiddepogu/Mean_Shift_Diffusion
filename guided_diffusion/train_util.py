@@ -15,7 +15,7 @@ from torchvision.utils import make_grid
 from . import dist_util, logger
 from .fp16_util import MixedPrecisionTrainer
 from .nn import update_ema
-from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, LossSecondMomentResamplerAfterSameT, SameTSampler, AlternateSampler
+from .resample import LossAwareSampler, UniformSampler, LossSecondMomentResampler, SameTSampler, AlternateSampler, GANTypeSampler
 from .script_util import NUM_CLASSES
 from .clustered_model import ClusteredModel
 from sklearn.decomposition import PCA
@@ -43,6 +43,7 @@ class TrainLoop:
         ema_rate,
         log_interval,
         save_interval,
+        fid_interval,
         resume_checkpoint,
         use_fp16=False,
         fp16_scale_growth=1e-3,
@@ -50,9 +51,12 @@ class TrainLoop:
         weight_decay=0.0,
         lr_anneal_steps=0,
         no_guidance_step=200000000,
+        freeze_guidance_after_no_guidance_step=True,
         # Sampling arguments for visualization during training
         clip_denoised=True,
-        num_samples_visualize=25,
+        num_samples=400,
+        num_samples_batch_size=200,
+        num_samples_visualize=100,
         use_ddim=False,
         image_size=64,
         training_data_inception_mu_sigma_path="",
@@ -71,6 +75,7 @@ class TrainLoop:
         )
         self.log_interval = log_interval
         self.save_interval = save_interval
+        self.fid_interval = fid_interval
         self.resume_checkpoint = resume_checkpoint
         self.use_fp16 = use_fp16
         self.fp16_scale_growth = fp16_scale_growth
@@ -78,8 +83,11 @@ class TrainLoop:
         self.weight_decay = weight_decay
         self.lr_anneal_steps = lr_anneal_steps
         self.no_guidance_step = no_guidance_step
+        self.freeze_guidance_after_no_guidance_step = freeze_guidance_after_no_guidance_step
 
         self.clip_denoised = clip_denoised
+        self.num_samples = num_samples
+        self.num_samples_batch_size = num_samples_batch_size
         self.num_samples_visualize = num_samples_visualize
         self.use_ddim = use_ddim
         self.image_size = image_size
@@ -264,17 +272,18 @@ class TrainLoop:
                     with th.no_grad():
                         # Generate samples
                         fid_samples = None
-                        for i in range(0,2):
+                        run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                        run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                        for i in range(0, run_num_samples // run_samples_batch_size):
+                            print(f"Sampling {run_num_samples} Images for batch number {i} out of {run_num_samples // self.num_samples_batch_size} batches!")
                             sample_fn = (
                                 self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
                             )
-                            # y = th.randint(low=0, high=NUM_CLASSES, size=(self.num_samples_visualize,), device=dist_util.dev())
-                            # y = th.tensor([0] * self.num_samples_visualize, device=dist_util.dev())
-                            y = th.tensor(([i for i in range(NUM_CLASSES)] * (self.num_samples_visualize // NUM_CLASSES)), device=dist_util.dev())
+                            y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
                             model_kwargs = {'y': y}
                             generated_samples = sample_fn(
                                 self.ddp_model,
-                                (self.num_samples_visualize, 3, self.image_size, self.image_size),
+                                (run_samples_batch_size, 3, self.image_size, self.image_size),
                                 clip_denoised=self.clip_denoised,
                                 model_kwargs=model_kwargs,
                             )
@@ -287,19 +296,22 @@ class TrainLoop:
                             else:
                                 fid_samples = th.cat((fid_samples, samples), dim=0)
                             if i==0:
-                                samples = samples.cpu().numpy()
+                                samples = samples[:self.num_samples_visualize].cpu().numpy()
                                 image_list = [sample for sample in samples]
                                 collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
                                 wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
-                        # Compute FID Score for the generated images
-                        print("FID samples shape:", fid_samples.shape())
-                        if self.training_data_inception_mu_sigma_path != "":
-                            print("Calculating FID Score!")
-                            generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples, self.inception_model, batch_size=128, device=dist_util.dev())
-                            fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
-                            # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
-                            wandb_log_images["FID"] = fid_value
-                            print(f"Calculated FID Score - {fid_value}!")
+                        print(f"Completed Sampling {run_num_samples} samples!")
+
+                        if (self.step % self.fid_interval == 0):
+                            # Compute FID Score for the generated images
+                            print("FID samples shape:", fid_samples.shape)
+                            if self.training_data_inception_mu_sigma_path != "":
+                                print("Calculating FID Score!")
+                                generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples.cpu().numpy(), self.inception_model, batch_size=128, device=dist_util.dev())
+                                fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
+                                # fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, self.training_data_inception_mu, self.training_data_inception_sigma)
+                                wandb_log_images["FID"] = fid_value
+                                print(f"Calculated FID Score - {fid_value}!")
                         
                         # Plot Gaussians at the last time step for all classes if Clustered Model
                         if isinstance(self.ddp_model.module, ClusteredModel):
@@ -346,16 +358,83 @@ class TrainLoop:
             last_batch = (i + self.microbatch) >= batch.shape[0]
 
             if isinstance(self.schedule_sampler, UniformSampler) or isinstance(self.schedule_sampler, LossSecondMomentResampler):
-                # For baseline samplers, setting no_guidance to False. This is in fact a no-op; but just for safety
-                no_guidance = False
-            elif isinstance(self.schedule_sampler, SameTSampler) or isinstance(self.schedule_sampler, LossSecondMomentResamplerAfterSameT):
-                # For clustered diffusion, settting no_guidance based on no_guidance_step parameter
-                no_guidance = self.step > self.no_guidance_step
+                guidance_model_freeze = True
+                denoise_model_freeze = False
+                guidance_loss_freeze = True
+                denoise_loss_freeze = False
+                sample_condition = "not-same"
+            elif isinstance(self.schedule_sampler, SameTSampler):
+                if self.step >= self.no_guidance_step:
+                    if self.freeze_guidance_after_no_guidance_step:
+                        guidance_model_freeze = True
+                    else:
+                        guidance_model_freeze = False
+                    denoise_model_freeze = False
+                    guidance_loss_freeze = True
+                    denoise_loss_freeze = False
+                    sample_condition = "not-same"
+                else:
+                    guidance_model_freeze = False
+                    denoise_model_freeze = False
+                    guidance_loss_freeze = False
+                    denoise_loss_freeze = False
+                    sample_condition = "same"
             elif isinstance(self.schedule_sampler, AlternateSampler):
-                # For clustered diffusion, setting this alternatively based on step number
-                no_guidance = (self.step > self.no_guidance_step) or (self.step % 2)
+                if self.step >= self.no_guidance_step:
+                    if self.freeze_guidance_after_no_guidance_step:
+                        guidance_model_freeze = True
+                    else:
+                        guidance_model_freeze = False
+                    denoise_model_freeze = False
+                    guidance_loss_freeze = True
+                    denoise_loss_freeze = False
+                    sample_condition = "not-same"
+                else:
+                    if self.step % 2:
+                        guidance_model_freeze = True
+                        denoise_model_freeze = False
+                        guidance_loss_freeze = True
+                        denoise_loss_freeze = False
+                        sample_condition = "not-same"
+                    else:
+                        guidance_model_freeze = False
+                        denoise_model_freeze = False
+                        guidance_loss_freeze = False
+                        denoise_loss_freeze = False
+                        sample_condition = "same"
+            elif isinstance(self.schedule_sampler, GANTypeSampler):
+                if self.step >= self.no_guidance_step:
+                    if self.freeze_guidance_after_no_guidance_step:
+                        guidance_model_freeze = True
+                    else:
+                        guidance_model_freeze = False
+                    denoise_model_freeze = False
+                    guidance_loss_freeze = True
+                    denoise_loss_freeze = False
+                    sample_condition = "not-same"
+                else:
+                    if self.step % 2:
+                        guidance_model_freeze = True
+                        denoise_model_freeze = False
+                        guidance_loss_freeze = True
+                        denoise_loss_freeze = False
+                        sample_condition = "not-same"
+                    else:
+                        guidance_model_freeze = False
+                        denoise_model_freeze = True
+                        guidance_loss_freeze = False
+                        denoise_loss_freeze = False
+                        sample_condition = "same"
+            
+            loss_flags = {
+                "guidance_model_freeze": guidance_model_freeze,
+                "denoise_model_freeze": denoise_model_freeze,
+                "guidance_loss_freeze": guidance_loss_freeze,
+                "denoise_loss_freeze": denoise_loss_freeze,
+                "sample_condition": sample_condition,
+            }
 
-            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), no_guidance=no_guidance)
+            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), loss_flags=loss_flags)
 
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
@@ -363,7 +442,7 @@ class TrainLoop:
                 micro,
                 t,
                 model_kwargs=micro_cond,
-                no_guidance=no_guidance
+                loss_flags=loss_flags
             )
 
             if last_batch or not self.use_ddp:
@@ -374,12 +453,6 @@ class TrainLoop:
 
             # THIS IS FOR BASELINE
             if isinstance(self.schedule_sampler, LossSecondMomentResampler):
-                self.schedule_sampler.update_with_local_losses(
-                    t, losses["loss"].detach()
-                )
-            
-            # Stat Loss aware in clustered diffusion case only when guidance is turned off
-            if no_guidance and isinstance(self.schedule_sampler, LossSecondMomentResamplerAfterSameT):
                 self.schedule_sampler.update_with_local_losses(
                     t, losses["loss"].detach()
                 )
