@@ -24,7 +24,8 @@ def main():
     logger.configure()
     if args.use_wandb:
         wandb.init(
-            entity = "llvm",
+            entity = "nyu_chanukya",
+            project="Clustered_Diffusion"
             config = args,
             name = args.wandb_run_name,
         )

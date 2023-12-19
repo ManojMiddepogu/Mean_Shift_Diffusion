@@ -169,6 +169,7 @@ class ResBlock(TimestepBlock):
         use_checkpoint=False,
         up=False,
         down=False,
+        resolution_parameter=1,
     ):
         super().__init__()
         self.channels = channels
@@ -186,6 +187,7 @@ class ResBlock(TimestepBlock):
         )
 
         self.updown = up or down
+        self.resolution_parameter = resolution_parameter
 
         if up:
             self.h_upd = Upsample(channels, False, dims)
@@ -203,6 +205,14 @@ class ResBlock(TimestepBlock):
                 2 * self.out_channels if use_scale_shift_norm else self.out_channels,
             ),
         )
+        # self.emb_layers = nn.Sequential(
+        #     nn.SiLU(),
+        #     linear(
+        #         emb_channels,
+        #         3 * 32 // self.resolution_parameter * 32 // self.resolution_parameter,
+        #     ),
+        # )
+        # self.rescale_layers = conv_nd(dims, 3, 2 * self.out_channels if self.use_scale_shift_norm else self.out_channels, 3, padding=1)
         self.out_layers = nn.Sequential(
             normalization(self.out_channels),
             nn.SiLU(),
@@ -242,7 +252,12 @@ class ResBlock(TimestepBlock):
             h = in_conv(h)
         else:
             h = self.in_layers(x)
+        
         emb_out = self.emb_layers(emb).type(h.dtype)
+        # emb_out = self.emb_layers(emb).type(h.dtype)
+        # emb_out = emb_out.view(-1, 3, 32 // self.resolution_parameter, 32 // self.resolution_parameter)
+        # emb_out = self.rescale_layers(emb_out)
+
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
         if self.use_scale_shift_norm:
@@ -495,6 +510,7 @@ class UNetModel(nn.Module):
                         dims=dims,
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm,
+                        resolution_parameter=ds,
                     )
                 ]
                 ch = int(mult * model_channels)
@@ -524,6 +540,7 @@ class UNetModel(nn.Module):
                             use_checkpoint=use_checkpoint,
                             use_scale_shift_norm=use_scale_shift_norm,
                             down=True,
+                            resolution_parameter=ds,
                         )
                         if resblock_updown
                         else Downsample(
@@ -544,6 +561,7 @@ class UNetModel(nn.Module):
                 dims=dims,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
+                resolution_parameter=ds,
             ),
             AttentionBlock(
                 ch,
@@ -559,6 +577,7 @@ class UNetModel(nn.Module):
                 dims=dims,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
+                resolution_parameter=ds,
             ),
         )
         self._feature_size += ch
@@ -576,6 +595,7 @@ class UNetModel(nn.Module):
                         dims=dims,
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm,
+                        resolution_parameter=ds,
                     )
                 ]
                 ch = int(model_channels * mult)
@@ -601,6 +621,7 @@ class UNetModel(nn.Module):
                             use_checkpoint=use_checkpoint,
                             use_scale_shift_norm=use_scale_shift_norm,
                             up=True,
+                            resolution_parameter=ds,
                         )
                         if resblock_updown
                         else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
@@ -753,6 +774,7 @@ class EncoderUNetModel(nn.Module):
                         dims=dims,
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm,
+                        resolution_parameter=ds,
                     )
                 ]
                 ch = int(mult * model_channels)
@@ -782,6 +804,7 @@ class EncoderUNetModel(nn.Module):
                             use_checkpoint=use_checkpoint,
                             use_scale_shift_norm=use_scale_shift_norm,
                             down=True,
+                            resolution_parameter=ds,
                         )
                         if resblock_updown
                         else Downsample(
@@ -802,6 +825,7 @@ class EncoderUNetModel(nn.Module):
                 dims=dims,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
+                resolution_parameter=ds,
             ),
             AttentionBlock(
                 ch,
@@ -817,6 +841,7 @@ class EncoderUNetModel(nn.Module):
                 dims=dims,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
+                resolution_parameter=ds,
             ),
         )
         self._feature_size += ch
