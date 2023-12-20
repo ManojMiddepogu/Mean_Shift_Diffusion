@@ -35,17 +35,9 @@ def save_images(dataset, subfolder):
         img = transforms.ToPILImage()(img_tensor)
         img.save(img_path)
 
-# # Organize images into subdirectories by class
-# for i, (img, target) in enumerate(train_dataset):
-#     class_dir = os.path.join(data_dir, str(target))
-#     if not os.path.exists(class_dir):
-#         os.makedirs(class_dir)
-#     img_path = os.path.join(class_dir, f"{target}_{i:05d}.png")
-#     img.save(img_path)
-
 # Save training and testing images
-# save_images(train_dataset, "train")
-# save_images(test_dataset, "test")
+save_images(train_dataset, "train")
+save_images(test_dataset, "test")
 
 def generate_npz_file(dataset, npz_filename):
     images = []

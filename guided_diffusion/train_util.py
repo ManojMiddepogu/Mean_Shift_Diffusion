@@ -4,6 +4,7 @@ import numpy as np
 import os
 import wandb
 
+import torch.nn.functional as F
 import blobfile as bf
 from PIL import Image
 import torch as th
@@ -324,7 +325,54 @@ class TrainLoop:
                             mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
                             gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
                             wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
-                        
+
+                            # Confusion Matrices for cosine similarity and distances at last time step
+                            mu_bar_last_t = mu_bar[-10:]
+                            mu_bar_last_t = mu_bar_last_t.view(mu_bar_last_t.shape[0], -1)
+                            mu_bar_last_t = th.cat((th.zeros((1, mu_bar_last_t.shape[-1]), device=mu_bar_last_t.device), mu_bar_last_t), dim=0)
+
+                            norm_tensor = F.normalize(mu_bar_last_t, p=2, dim=1)
+                            mu_bar_last_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
+                            mu_bar_last_t_distance = th.cdist(mu_bar_last_t, mu_bar_last_t, p=2)
+
+                            # Creating the plot
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            cax = ax.matshow(mu_bar_last_t_cosine_similarity_matrix.numpy(), cmap='Blues')
+                            # Adding color bar
+                            plt.colorbar(cax)
+                            # Adding titles and labels
+                            plt.title('Distance Matrix', pad=20)
+                            plt.xlabel('Classes')
+                            plt.ylabel('Classes')
+                            ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                            ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                            ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                            ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                            # Displaying values in each cell
+                            for (i, j), val in np.ndenumerate(mu_bar_last_t_cosine_similarity_matrix):
+                                ax.text(j, i, f'{val:.2f}', ha='center', va='center', color='black')
+                            wandb_log_images[f"Cosine Similarity at t={self.diffusion.num_timesteps}"] = wandb.Image(plt)
+                            plt.clf()
+
+                            # Creating the plot
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            cax = ax.matshow(mu_bar_last_t_distance.numpy(), cmap='Blues')
+                            # Adding color bar
+                            plt.colorbar(cax)
+                            # Adding titles and labels
+                            plt.title('Distance Matrix', pad=20)
+                            plt.xlabel('Classes')
+                            plt.ylabel('Classes')
+                            ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                            ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                            ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                            ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                            # Displaying values in each cell
+                            for (i, j), val in np.ndenumerate(mu_bar_last_t_distance):
+                                ax.text(j, i, f'{val:.2f}', ha='center', va='center', color='black')
+                            wandb_log_images[f"Distance at t={self.diffusion.num_timesteps}"] = wandb.Image(plt)
+                            plt.clf()
+
                         if self.use_wandb:
                             wandb.log(wandb_log_images, step=self.step)
                         

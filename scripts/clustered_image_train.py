@@ -25,7 +25,7 @@ def main():
     if args.use_wandb:
         wandb.init(
             entity = "nyu_chanukya",
-            project="Clustered_Diffusion"
+            project="Clustered_Diffusion",
             config = args,
             name = args.wandb_run_name,
         )

@@ -1,15 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=test_llvm_job
+#SBATCH --job-name=baseline_cifar_job
 
-#SBATCH --account=csci_ga_3033_102-2023fa
-#SBATCH --partition=n1s8-v100-1
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:rtx8000:1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=16GB
 
-#SBATCH --time=8:00:00
+#SBATCH --time=24:00:00
 
-#SBATCH --output=./test_llvm_job.out
-#SBATCH --error=./test_llvm_job.err
+#SBATCH --output=./baseline_cifar_job.out
+#SBATCH --error=./baseline_cifar_job.err
 #SBATCH --export=ALL
 
 openai_logdir=$1
