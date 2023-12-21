@@ -6,9 +6,9 @@ distance=0.1
 no_guidance_step=4000
 lr_anneal_steps=50001
 save_interval=1000
-fid_interval=2000
+fid_interval=1000
 num_samples=1000
-num_samples_batch_size=500
+num_samples_batch_size=1000
 use_scale_shift_norm=True
 
 same_t_sampler="same-t"
@@ -17,6 +17,7 @@ alternate_scheduler="alternate"
 gantype_scheduler="gantype"
 
 batch_size_128=128
+batch_size_384=384
 
 # Same-T Sampler
     # Step < no_guidance_step
@@ -56,24 +57,24 @@ batch_size_128=128
 # Baseline
 sbatch ./baseline_cifar_job.slurm "/scratch/crg9968/llvm/logs_baseline_cifar" $data_dir $training_data_inception_mu_sigma_path \
     $uniform_scheduler $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size "baseline_cifar_50K_uniform" \
-    $use_scale_shift_norm $batch_size_128
+    $use_scale_shift_norm $batch_size_384
 
 # Clustered, Alternate, Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_clustered_cifar_alternate_freeze" $data_dir $training_data_inception_mu_sigma_path $distance \
     $alternate_scheduler $no_guidance_step "True" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered_cifar_50K_alternate_freeze" $use_scale_shift_norm $batch_size_128
+    "clustered_cifar_50K_alternate_freeze" $use_scale_shift_norm $batch_size_384
 
 # Clustered, Alternate, No Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_clustered_cifar_alternate_nofreeze" $data_dir $training_data_inception_mu_sigma_path $distance \
     $alternate_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered_cifar_50K_alternate_nofreeze" $use_scale_shift_norm $batch_size_128
+    "clustered_cifar_50K_alternate_nofreeze" $use_scale_shift_norm $batch_size_384
 
 # Clustered, GANType, Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_clustered_cifar_gantype_freeze" $data_dir $training_data_inception_mu_sigma_path $distance \
     $gantype_scheduler $no_guidance_step "True" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered_cifar_50K_gantype_freeze" $use_scale_shift_norm $batch_size_128
+    "clustered_cifar_50K_gantype_freeze" $use_scale_shift_norm $batch_size_384
 
 # Clustered, GANType, No Freeze
 sbatch ./cifar_clustered_train_job.slurm "/scratch/crg9968/llvm/logs_clustered_cifar_gantype_nofreeze" $data_dir $training_data_inception_mu_sigma_path $distance \
     $gantype_scheduler $no_guidance_step "False" $lr_anneal_steps $save_interval $fid_interval $num_samples $num_samples_batch_size \
-    "clustered_cifar_50K_gantype_nofreeze" $use_scale_shift_norm $batch_size_128
+    "clustered_cifar_50K_gantype_nofreeze" $use_scale_shift_norm $batch_size_384

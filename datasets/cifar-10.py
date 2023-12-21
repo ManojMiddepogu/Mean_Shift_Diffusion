@@ -6,7 +6,7 @@ import torch
 import numpy as np
 
 # Set the path where you want to download CIFAR-10 dataset
-data_dir = "/scratch/crg9968/datasets/cifar10/"
+data_dir = "/scratch/crg9968/datasets/cifar10_2/"
 
 # Create the data directory if it doesn't exist
 if not os.path.exists(data_dir):
@@ -24,6 +24,8 @@ test_dataset = torchvision.datasets.CIFAR10(root=data_dir, train=False, download
 def save_images(dataset, subfolder):
     class_dirs = {}
     for i, (img_tensor, target) in enumerate(dataset):
+        # if target not in [0, 1]:
+        #     continue
         if target not in class_dirs:
             class_dir = os.path.join(data_dir, subfolder, str(target))
             os.makedirs(class_dir, exist_ok=True)
@@ -36,16 +38,16 @@ def save_images(dataset, subfolder):
         img.save(img_path)
 
 # Save training and testing images
-save_images(train_dataset, "train")
-save_images(test_dataset, "test")
+# save_images(train_dataset, "train")
+# save_images(test_dataset, "test")
 
 def generate_npz_file(dataset, npz_filename):
     images = []
     labels = []
 
     for i, (img_tensor, label) in enumerate(dataset):
-        # if i >= 1000:
-            # break
+        # if label not in [0, 1]:
+        #     continue
         # Convert tensor to numpy and append to list
         # NOTE HERE THE TRANFORM APPLIES GIVES IMAGE IN [0,1] RANGE, SO NO (SAMPLE + 1)
         sample = ((img_tensor) * 255).clamp(0, 255).to(torch.uint8)

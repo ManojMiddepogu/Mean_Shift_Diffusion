@@ -24,7 +24,7 @@ wandb_run_name=${10}
 use_scale_shift_norm=${11}
 batch_size=${12}
 
-singularity exec --bind /scratch --nv --overlay /scratch/crg9968/llvm/overlay-25GB-500K.ext3:ro /scratch/crg9968/llvm/cuda11.8.86-cudnn8.7-devel-ubuntu22.04.2.sif /bin/bash  -c "
+singularity exec --bind /scratch --nv --overlay /scratch/crg9968/llvm/overlay-50G-10M.ext3:ro /scratch/crg9968/llvm/cuda11.8.86-cudnn8.7-devel-ubuntu22.04.2.sif /bin/bash  -c "
 source /ext3/env.sh
 cd /scratch/crg9968/llvm/Clustered_Diffusion
 conda activate diffusion2

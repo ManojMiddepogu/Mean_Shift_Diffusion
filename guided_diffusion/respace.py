@@ -198,6 +198,12 @@ class _WrappedGuidanceModel:
     
     def eval(self):
         self.model.eval()
+    
+    def print_mu_diff(self, string):
+        self.model.print_mu_diff(string)
+    
+    def print_grads(self, string):
+        self.model.print_grads(string)
 
     # def __call__(self, ts, y, **kwargs):
     def __call__(self, ts, sqrt_one_minus_alphas_cumprod, y, **kwargs):

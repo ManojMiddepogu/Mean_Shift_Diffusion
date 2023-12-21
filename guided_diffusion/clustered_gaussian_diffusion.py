@@ -153,7 +153,8 @@ class ClusteredGaussianDiffusion:
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
 
-        self.test_print = True
+        self.test_print = False
+        self.previous_mu = None
 
     def q_mean_variance(self, x_start, t, mu_bar_y_t, sigma_bar_y_t):
         mean = (
@@ -472,6 +473,9 @@ class ClusteredGaussianDiffusion:
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
 
+        # guidance_model.print_mu_diff("training loss start")
+        # guidance_model.print_grads("training loss start")
+
         if loss_flags["guidance_model_freeze"]:
             with th.no_grad():
                 mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
@@ -489,6 +493,9 @@ class ClusteredGaussianDiffusion:
             if t_is_zero.any():
                 t_incremented = th.where(t_is_zero, t+1, t)
                 mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
+
+        # guidance_model.print_mu_diff("training loss mid")
+        # guidance_model.print_grads("training loss mid")
 
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         
@@ -568,6 +575,8 @@ class ClusteredGaussianDiffusion:
 
         # CHECK - ADD WEIGHTS HERE FOR LOSSES?
         terms["loss"] = terms["guidance_loss"] + terms["denoise_loss"]
+        # guidance_model.print_mu_diff("training loss end")
+        # guidance_model.print_grads("training loss end")
         return terms
 
 

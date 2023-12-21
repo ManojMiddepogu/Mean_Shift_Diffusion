@@ -31,7 +31,7 @@ from .inception import InceptionV3
 INITIAL_LOG_LOSS_SCALE = 20.0
 
 
-class TrainLoop:
+class ClusteredTrainLoop:
     def __init__(
         self,
         *,
@@ -121,19 +121,26 @@ class TrainLoop:
             fp16_scale_growth=fp16_scale_growth,
         )
 
-        self.opt = AdamW(
-            self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
+        self.guidance_opt = AdamW(
+            list(self.mp_trainer.model.guidance_model.parameters()), lr=self.lr, weight_decay=self.weight_decay
+        )
+        self.denoise_opt = AdamW(
+            list(self.mp_trainer.model.denoise_model.parameters()), lr=self.lr, weight_decay=self.weight_decay
         )
         if self.resume_step:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
             # being specified at the command line.
-            self.ema_params = [
+            self.guidance_ema_params, self.denoise_ema_params = [
                 self._load_ema_parameters(rate) for rate in self.ema_rate
             ]
         else:
-            self.ema_params = [
-                copy.deepcopy(self.mp_trainer.master_params)
+            self.guidance_ema_params = [
+                copy.deepcopy(list(self.mp_trainer.model.guidance_model.parameters()))
+                for _ in range(len(self.ema_rate))
+            ]
+            self.denoise_ema_params = [
+                copy.deepcopy(list(self.mp_trainer.model.denoise_model.parameters()))
                 for _ in range(len(self.ema_rate))
             ]
 
@@ -156,6 +163,14 @@ class TrainLoop:
             self.use_ddp = False
             self.ddp_model = self.model
 
+        self.loss_flags = {
+            "guidance_model_freeze": False,
+            "denoise_model_freeze": False,
+            "guidance_loss_freeze": False,
+            "denoise_loss_freeze": False,
+            "sample_condition": False,
+        }
+
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
 
@@ -172,32 +187,51 @@ class TrainLoop:
         dist_util.sync_params(self.model.parameters())
 
     def _load_ema_parameters(self, rate):
-        ema_params = copy.deepcopy(self.mp_trainer.master_params)
+        guidance_ema_params = copy.deepcopy(list(self.mp_trainer.model.guidance_model.parameters()))
+        denoise_ema_params = copy.deepcopy(list(self.mp_trainer.model.denoise_model.parameters()))
 
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
-        ema_checkpoint = find_ema_checkpoint(main_checkpoint, self.resume_step, rate)
-        if ema_checkpoint:
+        guidance_ema_checkpoint = find_guidance_ema_checkpoint(main_checkpoint, self.resume_step, rate)
+        denoise_ema_checkpoint = find_denoise_ema_checkpoint(main_checkpoint, self.resume_step, rate)
+        if guidance_ema_checkpoint:
             if dist.get_rank() == 0:
-                logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
+                logger.log(f"loading EMA from checkpoint: {guidance_ema_checkpoint}...")
                 state_dict = dist_util.load_state_dict(
-                    ema_checkpoint, map_location=dist_util.dev()
+                    guidance_ema_checkpoint, map_location=dist_util.dev()
                 )
-                ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
+                guidance_ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
+        if denoise_ema_checkpoint:
+            if dist.get_rank() == 0:
+                logger.log(f"loading EMA from checkpoint: {denoise_ema_checkpoint}...")
+                state_dict = dist_util.load_state_dict(
+                    denoise_ema_checkpoint, map_location=dist_util.dev()
+                )
+                denoise_ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
 
-        dist_util.sync_params(ema_params)
-        return ema_params
+        dist_util.sync_params(guidance_ema_params)
+        dist_util.sync_params(denoise_ema_params)
+        return guidance_ema_params, denoise_ema_params
 
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
-        opt_checkpoint = bf.join(
-            bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt"
+        guidance_opt_checkpoint = bf.join(
+            bf.dirname(main_checkpoint), f"guidance_opt{self.resume_step:06}.pt"
         )
-        if bf.exists(opt_checkpoint):
-            logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
+        denoise_opt_checkpoint = bf.join(
+            bf.dirname(main_checkpoint), f"denoise_opt{self.resume_step:06}.pt"
+        )
+        if bf.exists(guidance_opt_checkpoint):
+            logger.log(f"loading optimizer state from checkpoint: {guidance_opt_checkpoint}")
             state_dict = dist_util.load_state_dict(
-                opt_checkpoint, map_location=dist_util.dev()
+                guidance_opt_checkpoint, map_location=dist_util.dev()
             )
-            self.opt.load_state_dict(state_dict)
+            self.guidance_opt.load_state_dict(state_dict)
+        if bf.exists(denoise_opt_checkpoint):
+            logger.log(f"loading optimizer state from checkpoint: {denoise_opt_checkpoint}")
+            state_dict = dist_util.load_state_dict(
+                denoise_opt_checkpoint, map_location=dist_util.dev()
+            )
+            self.denoise_opt.load_state_dict(state_dict)
     
     def _create_image_collage(self, samples, rows=8, cols=8):
         # Assuming samples is a list of numpy arrays with shape (H, W, C)
@@ -262,130 +296,130 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
 
-            # if self.step < 100 or self.step % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
+            if self.step < 100 or self.step % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
             # if self.step % self.save_interval == 0:
-            #     if self.step % self.save_interval == 0:
-            #         self.save()
+                if self.step % self.save_interval == 0:
+                    self.save()
 
-            #     # Sample num_samples_visualize images everytime we save the model
-            #     if dist.get_rank() == 0:  # Make sure only the master process does the sampling
-            #         self.ddp_model.eval()
-            #         wandb_log_images = {}
+                # Sample num_samples_visualize images everytime we save the model
+                if dist.get_rank() == 0:  # Make sure only the master process does the sampling
+                    self.ddp_model.eval()
+                    wandb_log_images = {}
 
-            #         with th.no_grad():
-            #             if self.step % self.save_interval == 0:
-            #                 # Generate samples
-            #                 fid_samples = None
-            #                 if self.step == 0:
-            #                     run_num_samples = self.num_samples_visualize
-            #                     run_samples_batch_size = self.num_samples_visualize
-            #                 else:
-            #                     run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
-            #                     run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                    with th.no_grad():
+                        if self.step % self.save_interval == 0:
+                            # Generate samples
+                            fid_samples = None
+                            if self.step == 0:
+                                run_num_samples = self.num_samples_visualize
+                                run_samples_batch_size = self.num_samples_visualize
+                            else:
+                                run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                                run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
 
-            #                 for i in range(0, run_num_samples // run_samples_batch_size):
-            #                     print(f"Sampling {run_num_samples} Images for batch number {i+1} out of {run_num_samples // self.num_samples_batch_size} batches!")
-            #                     sample_fn = (
-            #                         self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
-            #                     )
-            #                     y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
-            #                     model_kwargs = {'y': y}
-            #                     generated_samples = sample_fn(
-            #                         self.ddp_model,
-            #                         (run_samples_batch_size, 3, self.image_size, self.image_size),
-            #                         clip_denoised=self.clip_denoised,
-            #                         model_kwargs=model_kwargs,
-            #                     )
-            #                     # Normalize samples to [0, 255] and change to uint8
-            #                     samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
-            #                     # Rearrange the tensor to be in HWC format for image saving
-            #                     samples = samples.permute(0, 2, 3, 1).contiguous()
-            #                     if fid_samples == None:
-            #                         fid_samples = samples
-            #                     else:
-            #                         fid_samples = th.cat((fid_samples, samples), dim=0)
-            #                     if i==0:
-            #                         samples = samples[:self.num_samples_visualize].cpu().numpy()
-            #                         image_list = [sample for sample in samples]
-            #                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
-            #                         wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
-            #                 print(f"Completed Sampling {run_num_samples} samples!")
+                            for i in range(0, run_num_samples // run_samples_batch_size):
+                                print(f"Sampling {run_num_samples} Images for batch number {i+1} out of {run_num_samples // self.num_samples_batch_size} batches!")
+                                sample_fn = (
+                                    self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
+                                )
+                                y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
+                                model_kwargs = {'y': y}
+                                generated_samples = sample_fn(
+                                    self.ddp_model,
+                                    (run_samples_batch_size, 3, self.image_size, self.image_size),
+                                    clip_denoised=self.clip_denoised,
+                                    model_kwargs=model_kwargs,
+                                )
+                                # Normalize samples to [0, 255] and change to uint8
+                                samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                                # Rearrange the tensor to be in HWC format for image saving
+                                samples = samples.permute(0, 2, 3, 1).contiguous()
+                                if fid_samples == None:
+                                    fid_samples = samples
+                                else:
+                                    fid_samples = th.cat((fid_samples, samples), dim=0)
+                                if i==0:
+                                    samples = samples[:self.num_samples_visualize].cpu().numpy()
+                                    image_list = [sample for sample in samples]
+                                    collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
+                                    wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
+                            print(f"Completed Sampling {run_num_samples} samples!")
 
-            #                 if (self.step % self.fid_interval == 0):
-            #                     # Compute FID Score for the generated images
-            #                     print("FID samples shape:", fid_samples.shape)
-            #                     if self.training_data_inception_mu_sigma_path != "":
-            #                         print("Calculating FID Score!")
-            #                         generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples.cpu().numpy(), self.inception_model, batch_size=128, device=dist_util.dev())
-            #                         fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
-            #                         wandb_log_images["FID"] = fid_value
-            #                         print(f"Calculated FID Score - {fid_value}!")
+                            if (self.step % self.fid_interval == 0):
+                                # Compute FID Score for the generated images
+                                print("FID samples shape:", fid_samples.shape)
+                                if self.training_data_inception_mu_sigma_path != "":
+                                    print("Calculating FID Score!")
+                                    generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples.cpu().numpy(), self.inception_model, batch_size=128, device=dist_util.dev())
+                                    fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
+                                    wandb_log_images["FID"] = fid_value
+                                    print(f"Calculated FID Score - {fid_value}!")
 
-            #             # Plot Gaussians at the last time step for all classes if Clustered Model
-            #             if isinstance(self.ddp_model.module, ClusteredModel):
-            #                 y = th.arange(NUM_CLASSES, device=dist_util.dev()).repeat(10 + 1)
-            #                 plot_t = th.cat((th.arange(start = 0, end = self.diffusion.num_timesteps, step = self.diffusion.num_timesteps / 10, device = dist_util.dev()), th.tensor([self.diffusion.num_timesteps - 1], device=dist_util.dev()))).repeat_interleave(NUM_CLASSES).long()
-            #                 # y = th.arange(NUM_CLASSES, device=dist_util.dev())
-            #                 # plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
-            #                 model_kwargs = {"y": y}
+                        # Plot Gaussians at the last time step for all classes if Clustered Model
+                        if isinstance(self.ddp_model.module, ClusteredModel):
+                            y = th.arange(NUM_CLASSES, device=dist_util.dev()).repeat(10 + 1)
+                            plot_t = th.cat((th.arange(start = 0, end = self.diffusion.num_timesteps, step = self.diffusion.num_timesteps / 10, device = dist_util.dev()), th.tensor([self.diffusion.num_timesteps - 1], device=dist_util.dev()))).repeat_interleave(NUM_CLASSES).long()
+                            # y = th.arange(NUM_CLASSES, device=dist_util.dev())
+                            # plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
+                            model_kwargs = {"y": y}
 
-            #                 mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
-            #                 gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
-            #                 wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
+                            mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
+                            gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
+                            wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
 
-            #                 fig_cosine, axes_cosine = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for cosine similarity
-            #                 fig_distance, axes_distance = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for distance
+                            fig_cosine, axes_cosine = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for cosine similarity
+                            fig_distance, axes_distance = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for distance
 
-            #                 for i in range(0, mu_bar.shape[0], NUM_CLASSES):
-            #                     t_ = plot_t[i].item()
-            #                     mu_bar_t = mu_bar[i:i + NUM_CLASSES]
-            #                     mu_bar_t = mu_bar_t.view(mu_bar_t.shape[0], -1)
-            #                     mu_bar_t = th.cat((th.zeros((1, mu_bar_t.shape[-1]), device=mu_bar_t.device), mu_bar_t), dim=0)
+                            for i in range(0, mu_bar.shape[0], NUM_CLASSES):
+                                t_ = plot_t[i].item()
+                                mu_bar_t = mu_bar[i:i + NUM_CLASSES]
+                                mu_bar_t = mu_bar_t.view(mu_bar_t.shape[0], -1)
+                                mu_bar_t = th.cat((th.zeros((1, mu_bar_t.shape[-1]), device=mu_bar_t.device), mu_bar_t), dim=0)
 
-            #                     norm_tensor = F.normalize(mu_bar_t, p=2, dim=1)
-            #                     mu_bar_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
-            #                     mu_bar_t_distance = th.cdist(mu_bar_t, mu_bar_t, p=2)
+                                norm_tensor = F.normalize(mu_bar_t, p=2, dim=1)
+                                mu_bar_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
+                                mu_bar_t_distance = th.cdist(mu_bar_t, mu_bar_t, p=2)
 
-            #                     # Plotting cosine similarity matrix
-            #                     ax = axes_cosine[i // NUM_CLASSES]
-            #                     mu_bar_t_cosine_similarity_matrix_numpy = mu_bar_t_cosine_similarity_matrix.cpu().numpy()
-            #                     cax1 = ax.matshow(mu_bar_t_cosine_similarity_matrix_numpy, cmap='Blues')
-            #                     ax.set_title(f'Cosine Similarity at t={t_}')
-            #                     ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
-            #                     ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
-            #                     for (i_, j_), val in np.ndenumerate(mu_bar_t_cosine_similarity_matrix_numpy):
-            #                         ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
+                                # Plotting cosine similarity matrix
+                                ax = axes_cosine[i // NUM_CLASSES]
+                                mu_bar_t_cosine_similarity_matrix_numpy = mu_bar_t_cosine_similarity_matrix.cpu().numpy()
+                                cax1 = ax.matshow(mu_bar_t_cosine_similarity_matrix_numpy, cmap='Blues')
+                                ax.set_title(f'Cosine Similarity at t={t_}')
+                                ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                                ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                                for (i_, j_), val in np.ndenumerate(mu_bar_t_cosine_similarity_matrix_numpy):
+                                    ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
 
-            #                     # Plotting distance matrix
-            #                     ax = axes_distance[i // NUM_CLASSES]
-            #                     mu_bar_t_distance_numpy = mu_bar_t_distance.cpu().numpy()
-            #                     cax2 = ax.matshow(mu_bar_t_distance_numpy, cmap='Blues')
-            #                     ax.set_title(f'Distance at t={t_}')
-            #                     ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
-            #                     ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
-            #                     for (i_, j_), val in np.ndenumerate(mu_bar_t_distance_numpy):
-            #                         ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
+                                # Plotting distance matrix
+                                ax = axes_distance[i // NUM_CLASSES]
+                                mu_bar_t_distance_numpy = mu_bar_t_distance.cpu().numpy()
+                                cax2 = ax.matshow(mu_bar_t_distance_numpy, cmap='Blues')
+                                ax.set_title(f'Distance at t={t_}')
+                                ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                                ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                                for (i_, j_), val in np.ndenumerate(mu_bar_t_distance_numpy):
+                                    ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
 
-            #                 # Adding a color bar for the last subplot of each figure
-            #                 # plt.colorbar(cax1, ax=axes_cosine[-1], orientation='vertical')
-            #                 # plt.colorbar(cax2, ax=axes_distance[-1], orientation='vertical')
+                            # Adding a color bar for the last subplot of each figure
+                            # plt.colorbar(cax1, ax=axes_cosine[-1], orientation='vertical')
+                            # plt.colorbar(cax2, ax=axes_distance[-1], orientation='vertical')
 
-            #                 # Saving or displaying the figures
-            #                 fig_cosine.suptitle('Cosine Similarity Matrices for Different Timesteps')
-            #                 fig_distance.suptitle('Distance Matrices for Different Timesteps')
+                            # Saving or displaying the figures
+                            fig_cosine.suptitle('Cosine Similarity Matrices for Different Timesteps')
+                            fig_distance.suptitle('Distance Matrices for Different Timesteps')
 
-            #                 # Use wandb to log these images if required
-            #                 wandb_log_images["Cosine Similarity Matrices"] = wandb.Image(fig_cosine)
-            #                 wandb_log_images["Distance Matrices"] = wandb.Image(fig_distance)
+                            # Use wandb to log these images if required
+                            wandb_log_images["Cosine Similarity Matrices"] = wandb.Image(fig_cosine)
+                            wandb_log_images["Distance Matrices"] = wandb.Image(fig_distance)
 
-            #             if self.use_wandb:
-            #                 wandb.log(wandb_log_images, step=self.step)
+                        if self.use_wandb:
+                            wandb.log(wandb_log_images, step=self.step)
                         
-            #         self.ddp_model.train()
+                    self.ddp_model.train()
                 
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
@@ -397,29 +431,40 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        print("STEP: ", self.step)
-        self.ddp_model.module.guidance_model.print_mu_diff("loop start")
-        self.ddp_model.module.guidance_model.print_grads("loop start")
+        # print("STEP: ", self.step)
+        # self.ddp_model.module.guidance_model.print_mu_diff("loop start")
+        # self.ddp_model.module.guidance_model.print_grads("loop start")
         self.forward_backward(batch, cond)
 
-        # for name, param in self.ddp_model.module.guidance_model.named_parameters():
-        #     if param.grad is not None:
-        #         grad_norm = th.norm(param.grad)
-        #         print(f"Gradient norm for {name}: {grad_norm}")
+        # self.ddp_model.module.guidance_model.print_mu_diff("before optimize")
+        # self.ddp_model.module.guidance_model.print_grads("before optimize")
 
-        self.ddp_model.module.guidance_model.print_mu_diff("before optimize")
-        self.ddp_model.module.guidance_model.print_grads("before optimize")
-        took_step = self.mp_trainer.optimize(self.opt)
-        self.ddp_model.module.guidance_model.print_mu_diff("after optimize")
-        self.ddp_model.module.guidance_model.print_grads("after optimize")
-        if took_step:
-            self._update_ema()
-        self.ddp_model.module.guidance_model.print_mu_diff("after ema")
-        self.ddp_model.module.guidance_model.print_grads("after ema")
-        self._anneal_lr()
+        guidance_took_step = False
+        denoise_took_step = False
+
+        if self.loss_flags["guidance_model_freeze"]:
+            denoise_took_step = self.mp_trainer.optimize(self.denoise_opt)
+        elif self.loss_flags["denoise_model_freeze"]:
+            guidance_took_step = self.mp_trainer.optimize(self.guidance_opt)
+        else:
+            denoise_took_step = self.mp_trainer.optimize(self.denoise_opt)
+            guidance_took_step = self.mp_trainer.optimize(self.guidance_opt)
+        
+        # self.ddp_model.module.guidance_model.print_mu_diff("after optimize")
+        # self.ddp_model.module.guidance_model.print_grads("after optimize")
+        if guidance_took_step:
+            self._update_guidance_ema()
+        if denoise_took_step:
+            self._update_denoise_ema()
+        # self.ddp_model.module.guidance_model.print_mu_diff("after ema")
+        # self.ddp_model.module.guidance_model.print_grads("after ema")
+        if guidance_took_step:
+            self._anneal_guidance_lr()
+        if denoise_took_step:
+            self._anneal_denoise_lr()
         self.log_step()
-        self.ddp_model.module.guidance_model.print_mu_diff("loop end")
-        self.ddp_model.module.guidance_model.print_grads("loop end")
+        # self.ddp_model.module.guidance_model.print_mu_diff("loop end")
+        # self.ddp_model.module.guidance_model.print_grads("loop end")
 
     def forward_backward(self, batch, cond):
         self.mp_trainer.zero_grad()
@@ -502,17 +547,16 @@ class TrainLoop:
             else:
                 raise ValueError(f"Not valid sampler!")
             
-            loss_flags = {
+            self.loss_flags = {
                 "guidance_model_freeze": guidance_model_freeze,
                 "denoise_model_freeze": denoise_model_freeze,
                 "guidance_loss_freeze": guidance_loss_freeze,
                 "denoise_loss_freeze": denoise_loss_freeze,
                 "sample_condition": sample_condition,
             }
+            print(self.loss_flags)
 
-            print(loss_flags)
-
-            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), loss_flags=loss_flags)
+            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev(), loss_flags=self.loss_flags)
 
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
@@ -520,7 +564,7 @@ class TrainLoop:
                 micro,
                 t,
                 model_kwargs=micro_cond,
-                loss_flags=loss_flags
+                loss_flags=self.loss_flags
             )
 
             if last_batch or not self.use_ddp:
@@ -550,16 +594,28 @@ class TrainLoop:
                     wandb.log(wandb_log_data, step=self.step)
             self.mp_trainer.backward(loss)
 
-    def _update_ema(self):
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            update_ema(params, self.mp_trainer.master_params, rate=rate)
+    def _update_guidance_ema(self):
+        for rate, params in zip(self.ema_rate, self.guidance_ema_params):
+            update_ema(params, list(self.mp_trainer.model.guidance_model.parameters()), rate=rate)
+        
+    def _update_denoise_ema(self):
+        for rate, params in zip(self.ema_rate, self.denoise_ema_params):
+            update_ema(params, list(self.mp_trainer.model.denoise_model.parameters()), rate=rate)
 
-    def _anneal_lr(self):
+    def _anneal_guidance_lr(self):
         if not self.lr_anneal_steps:
             return
         frac_done = (self.step + self.resume_step) / self.lr_anneal_steps
         lr = self.lr * (1 - frac_done)
-        for param_group in self.opt.param_groups:
+        for param_group in self.guidance_opt.param_groups:
+            param_group["lr"] = lr
+    
+    def _anneal_denoise_lr(self):
+        if not self.lr_anneal_steps:
+            return
+        frac_done = (self.step + self.resume_step) / self.lr_anneal_steps
+        lr = self.lr * (1 - frac_done)
+        for param_group in self.denoise_opt.param_groups:
             param_group["lr"] = lr
 
     def log_step(self):
@@ -567,27 +623,47 @@ class TrainLoop:
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
 
     def save(self):
-        def save_checkpoint(rate, params):
-            state_dict = self.mp_trainer.master_params_to_state_dict(params)
+        def save_checkpoint(rate, params, type_="model"):
+
+            if type_ == "model":
+                state_dict = self.mp_trainer.master_params_to_state_dict(params)
+            elif type_ == "guidance":
+                state_dict = self.mp_trainer.guidance_params_to_state_dict(params)
+            elif type_ == "denoise":
+                state_dict = self.mp_trainer.denoise_params_to_state_dict(params)
+            else:
+                raise ValueError("INVALID ENTRY HERE. WHAT ARE YOU DOING?")
+                
             if dist.get_rank() == 0:
                 logger.log(f"saving model {rate}...")
-                if not rate:
+                if type_ == "model":
                     filename = f"model{(self.step+self.resume_step):06d}.pt"
+                elif type_ == "guidance":
+                    filename = f"guidance_ema_{rate}_{(self.step+self.resume_step):06d}.pt"
+                elif type_ == "denoise":
+                    filename = f"denoise_ema_{rate}_{(self.step+self.resume_step):06d}.pt"
                 else:
-                    filename = f"ema_{rate}_{(self.step+self.resume_step):06d}.pt"
+                    raise ValueError("INVALID ENTRY HERE. WHAT ARE YOU DOING?")
                 with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
                     th.save(state_dict, f)
 
-        save_checkpoint(0, self.mp_trainer.master_params)
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            save_checkpoint(rate, params)
+        save_checkpoint(0, self.mp_trainer.master_params, type_ = "model")
+        for rate, params in zip(self.ema_rate, self.guidance_ema_params):
+            save_checkpoint(rate, params, type_="guidance")
+        for rate, params in zip(self.ema_rate, self.denoise_ema_params):
+            save_checkpoint(rate, params, type_="denoise")
 
         if dist.get_rank() == 0:
             with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
+                bf.join(get_blob_logdir(), f"guidance_opt{(self.step+self.resume_step):06d}.pt"),
                 "wb",
             ) as f:
-                th.save(self.opt.state_dict(), f)
+                th.save(self.guidance_opt.state_dict(), f)
+            with bf.BlobFile(
+                bf.join(get_blob_logdir(), f"denoise_opt{(self.step+self.resume_step):06d}.pt"),
+                "wb",
+            ) as f:
+                th.save(self.denoise_opt.state_dict(), f)
 
         dist.barrier()
 
@@ -619,10 +695,20 @@ def find_resume_checkpoint():
     return None
 
 
-def find_ema_checkpoint(main_checkpoint, step, rate):
+def find_guidance_ema_checkpoint(main_checkpoint, step, rate):
     if main_checkpoint is None:
         return None
-    filename = f"ema_{rate}_{(step):06d}.pt"
+    filename = f"guidance_ema_{rate}_{(step):06d}.pt"
+    path = bf.join(bf.dirname(main_checkpoint), filename)
+    if bf.exists(path):
+        return path
+    return None
+
+
+def find_denoise_ema_checkpoint(main_checkpoint, step, rate):
+    if main_checkpoint is None:
+        return None
+    filename = f"denoise_ema_{rate}_{(step):06d}.pt"
     path = bf.join(bf.dirname(main_checkpoint), filename)
     if bf.exists(path):
         return path

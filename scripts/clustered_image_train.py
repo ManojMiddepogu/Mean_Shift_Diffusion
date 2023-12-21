@@ -14,7 +14,7 @@ from guided_diffusion.script_util import (
     args_to_dict,
     add_dict_to_argparser,
 )
-from guided_diffusion.train_util import TrainLoop
+from guided_diffusion.clustered_train_util import ClusteredTrainLoop
 
 
 def main():
@@ -48,7 +48,7 @@ def main():
     )
 
     logger.log("training...")
-    TrainLoop(
+    ClusteredTrainLoop(
         model=model,
         diffusion=diffusion,
         data=data,

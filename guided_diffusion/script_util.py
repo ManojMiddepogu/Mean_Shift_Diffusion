@@ -9,7 +9,7 @@ from .unet import SuperResModel, UNetModel, EncoderUNetModel
 from .clustered_model import ClusteredModel
 
 # NUM_CLASSES = 1000
-NUM_CLASSES = 10
+NUM_CLASSES = 2
 
 
 def diffusion_defaults():

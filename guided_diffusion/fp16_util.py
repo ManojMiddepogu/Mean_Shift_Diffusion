@@ -159,6 +159,10 @@ class MixedPrecisionTrainer:
         self.fp16_scale_growth = fp16_scale_growth
 
         self.model_params = list(self.model.parameters())
+
+        # for name, param in self.model.named_parameters():
+        #     print(f"Gradient norm for {name}")
+
         self.master_params = self.model_params
         self.param_groups_and_shapes = None
         self.lg_loss_scale = initial_lg_loss_scale
@@ -208,10 +212,16 @@ class MixedPrecisionTrainer:
         return True
 
     def _optimize_normal(self, opt: th.optim.Optimizer):
+        # self.model.guidance_model.print_mu_diff("before compute norms")
+        # self.model.guidance_model.print_grads("GRADS before compute norms")
         grad_norm, param_norm = self._compute_norms()
+        # self.model.guidance_model.print_mu_diff("after compute norms")
+        # self.model.guidance_model.print_grads("GRADS after compute norms")
         logger.logkv_mean("grad_norm", grad_norm)
         logger.logkv_mean("param_norm", param_norm)
         opt.step()
+        # self.model.guidance_model.print_mu_diff("after step")
+        # self.model.guidance_model.print_grads("GRADS after step")
         return True
 
     def _compute_norms(self, grad_scale=1.0):
@@ -227,6 +237,16 @@ class MixedPrecisionTrainer:
     def master_params_to_state_dict(self, master_params):
         return master_params_to_state_dict(
             self.model, self.param_groups_and_shapes, master_params, self.use_fp16
+        )
+    
+    def guidance_params_to_state_dict(self, guidance_params):
+        return master_params_to_state_dict(
+            self.model.guidance_model, self.param_groups_and_shapes, guidance_params, self.use_fp16
+        )
+    
+    def denoise_params_to_state_dict(self, denoise_params):
+        return master_params_to_state_dict(
+            self.model.denoise_model, self.param_groups_and_shapes, denoise_params, self.use_fp16
         )
 
     def state_dict_to_master_params(self, state_dict):
