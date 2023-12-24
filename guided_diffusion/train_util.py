@@ -262,130 +262,129 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
 
-            # if self.step < 100 or self.step % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
-            # if self.step % self.save_interval == 0:
-            #     if self.step % self.save_interval == 0:
-            #         self.save()
+            if self.step < 100 or self.step % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
+                if self.step % self.save_interval == 0:
+                    self.save()
 
-            #     # Sample num_samples_visualize images everytime we save the model
-            #     if dist.get_rank() == 0:  # Make sure only the master process does the sampling
-            #         self.ddp_model.eval()
-            #         wandb_log_images = {}
+                # Sample num_samples_visualize images everytime we save the model
+                if dist.get_rank() == 0:  # Make sure only the master process does the sampling
+                    self.ddp_model.eval()
+                    wandb_log_images = {}
 
-            #         with th.no_grad():
-            #             if self.step % self.save_interval == 0:
-            #                 # Generate samples
-            #                 fid_samples = None
-            #                 if self.step == 0:
-            #                     run_num_samples = self.num_samples_visualize
-            #                     run_samples_batch_size = self.num_samples_visualize
-            #                 else:
-            #                     run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
-            #                     run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                    with th.no_grad():
+                        if self.step % self.save_interval == 0:
+                            # Generate samples
+                            fid_samples = None
+                            if self.step == 0:
+                                run_num_samples = self.num_samples_visualize
+                                run_samples_batch_size = self.num_samples_visualize
+                            else:
+                                run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                                run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
 
-            #                 for i in range(0, run_num_samples // run_samples_batch_size):
-            #                     print(f"Sampling {run_num_samples} Images for batch number {i+1} out of {run_num_samples // self.num_samples_batch_size} batches!")
-            #                     sample_fn = (
-            #                         self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
-            #                     )
-            #                     y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
-            #                     model_kwargs = {'y': y}
-            #                     generated_samples = sample_fn(
-            #                         self.ddp_model,
-            #                         (run_samples_batch_size, 3, self.image_size, self.image_size),
-            #                         clip_denoised=self.clip_denoised,
-            #                         model_kwargs=model_kwargs,
-            #                     )
-            #                     # Normalize samples to [0, 255] and change to uint8
-            #                     samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
-            #                     # Rearrange the tensor to be in HWC format for image saving
-            #                     samples = samples.permute(0, 2, 3, 1).contiguous()
-            #                     if fid_samples == None:
-            #                         fid_samples = samples
-            #                     else:
-            #                         fid_samples = th.cat((fid_samples, samples), dim=0)
-            #                     if i==0:
-            #                         samples = samples[:self.num_samples_visualize].cpu().numpy()
-            #                         image_list = [sample for sample in samples]
-            #                         collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
-            #                         wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
-            #                 print(f"Completed Sampling {run_num_samples} samples!")
+                            for i in range(0, run_num_samples // run_samples_batch_size):
+                                print(f"Sampling {run_num_samples} Images for batch number {i+1} out of {run_num_samples // self.num_samples_batch_size} batches!")
+                                sample_fn = (
+                                    self.diffusion.p_sample_loop if not self.use_ddim else self.diffusion.ddim_sample_loop
+                                )
+                                y = th.tensor(([i for i in range(NUM_CLASSES)] * (run_samples_batch_size // NUM_CLASSES)), device=dist_util.dev())
+                                model_kwargs = {'y': y}
+                                generated_samples = sample_fn(
+                                    self.ddp_model,
+                                    (run_samples_batch_size, 3, self.image_size, self.image_size),
+                                    clip_denoised=self.clip_denoised,
+                                    model_kwargs=model_kwargs,
+                                )
+                                # Normalize samples to [0, 255] and change to uint8
+                                samples = ((generated_samples + 1) * 127.5).clamp(0, 255).to(th.uint8)
+                                # Rearrange the tensor to be in HWC format for image saving
+                                samples = samples.permute(0, 2, 3, 1).contiguous()
+                                if fid_samples == None:
+                                    fid_samples = samples
+                                else:
+                                    fid_samples = th.cat((fid_samples, samples), dim=0)
+                                if i==0:
+                                    samples = samples[:self.num_samples_visualize].cpu().numpy()
+                                    image_list = [sample for sample in samples]
+                                    collage = self._create_image_collage(image_list, int(np.sqrt(self.num_samples_visualize)), int(np.sqrt(self.num_samples_visualize)))
+                                    wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
+                            print(f"Completed Sampling {run_num_samples} samples!")
 
-            #                 if (self.step % self.fid_interval == 0):
-            #                     # Compute FID Score for the generated images
-            #                     print("FID samples shape:", fid_samples.shape)
-            #                     if self.training_data_inception_mu_sigma_path != "":
-            #                         print("Calculating FID Score!")
-            #                         generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples.cpu().numpy(), self.inception_model, batch_size=128, device=dist_util.dev())
-            #                         fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
-            #                         wandb_log_images["FID"] = fid_value
-            #                         print(f"Calculated FID Score - {fid_value}!")
+                            if (self.step % self.fid_interval == 0):
+                                # Compute FID Score for the generated images
+                                print("FID samples shape:", fid_samples.shape)
+                                if self.training_data_inception_mu_sigma_path != "":
+                                    print("Calculating FID Score!")
+                                    generated_inception_mu, generated_inception_sigma = calculate_activation_statistics(fid_samples.cpu().numpy(), self.inception_model, batch_size=128, device=dist_util.dev())
+                                    fid_value = calculate_frechet_distance(self.training_data_inception_mu, self.training_data_inception_sigma, generated_inception_mu, generated_inception_sigma)
+                                    wandb_log_images["FID"] = fid_value
+                                    print(f"Calculated FID Score - {fid_value}!")
 
-            #             # Plot Gaussians at the last time step for all classes if Clustered Model
-            #             if isinstance(self.ddp_model.module, ClusteredModel):
-            #                 y = th.arange(NUM_CLASSES, device=dist_util.dev()).repeat(10 + 1)
-            #                 plot_t = th.cat((th.arange(start = 0, end = self.diffusion.num_timesteps, step = self.diffusion.num_timesteps / 10, device = dist_util.dev()), th.tensor([self.diffusion.num_timesteps - 1], device=dist_util.dev()))).repeat_interleave(NUM_CLASSES).long()
-            #                 # y = th.arange(NUM_CLASSES, device=dist_util.dev())
-            #                 # plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
-            #                 model_kwargs = {"y": y}
+                        # Plot Gaussians at the last time step for all classes if Clustered Model
+                        if isinstance(self.ddp_model.module, ClusteredModel):
+                            y = th.arange(NUM_CLASSES, device=dist_util.dev()).repeat(10 + 1)
+                            plot_t = th.cat((th.arange(start = 0, end = self.diffusion.num_timesteps, step = self.diffusion.num_timesteps / 10, device = dist_util.dev()), th.tensor([self.diffusion.num_timesteps - 1], device=dist_util.dev()))).repeat_interleave(NUM_CLASSES).long()
+                            # y = th.arange(NUM_CLASSES, device=dist_util.dev())
+                            # plot_t = th.tensor([self.diffusion.num_timesteps - 1] * NUM_CLASSES, device=dist_util.dev())
+                            model_kwargs = {"y": y}
 
-            #                 mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
-            #                 gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
-            #                 wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
+                            mu_bar, sigma_bar = self.ddp_model.module.guidance_model(plot_t, self.diffusion.sqrt_one_minus_alphas_cumprod, y)
+                            gaussian_image = self._plot_multiple_gaussian_contours(mu_bar, sigma_bar, plot_t)
+                            wandb_log_images["Gaussian 2D Plots"] = wandb.Image(gaussian_image, caption = "Gaussian 2D Plot")
 
-            #                 fig_cosine, axes_cosine = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for cosine similarity
-            #                 fig_distance, axes_distance = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for distance
+                            fig_cosine, axes_cosine = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for cosine similarity
+                            fig_distance, axes_distance = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for distance
 
-            #                 for i in range(0, mu_bar.shape[0], NUM_CLASSES):
-            #                     t_ = plot_t[i].item()
-            #                     mu_bar_t = mu_bar[i:i + NUM_CLASSES]
-            #                     mu_bar_t = mu_bar_t.view(mu_bar_t.shape[0], -1)
-            #                     mu_bar_t = th.cat((th.zeros((1, mu_bar_t.shape[-1]), device=mu_bar_t.device), mu_bar_t), dim=0)
+                            for i in range(0, mu_bar.shape[0], NUM_CLASSES):
+                                t_ = plot_t[i].item()
+                                mu_bar_t = mu_bar[i:i + NUM_CLASSES]
+                                mu_bar_t = mu_bar_t.view(mu_bar_t.shape[0], -1)
+                                mu_bar_t = th.cat((th.zeros((1, mu_bar_t.shape[-1]), device=mu_bar_t.device), mu_bar_t), dim=0)
 
-            #                     norm_tensor = F.normalize(mu_bar_t, p=2, dim=1)
-            #                     mu_bar_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
-            #                     mu_bar_t_distance = th.cdist(mu_bar_t, mu_bar_t, p=2)
+                                norm_tensor = F.normalize(mu_bar_t, p=2, dim=1)
+                                mu_bar_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
+                                mu_bar_t_distance = th.cdist(mu_bar_t, mu_bar_t, p=2)
 
-            #                     # Plotting cosine similarity matrix
-            #                     ax = axes_cosine[i // NUM_CLASSES]
-            #                     mu_bar_t_cosine_similarity_matrix_numpy = mu_bar_t_cosine_similarity_matrix.cpu().numpy()
-            #                     cax1 = ax.matshow(mu_bar_t_cosine_similarity_matrix_numpy, cmap='Blues')
-            #                     ax.set_title(f'Cosine Similarity at t={t_}')
-            #                     ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
-            #                     ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
-            #                     for (i_, j_), val in np.ndenumerate(mu_bar_t_cosine_similarity_matrix_numpy):
-            #                         ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
+                                # Plotting cosine similarity matrix
+                                ax = axes_cosine[i // NUM_CLASSES]
+                                mu_bar_t_cosine_similarity_matrix_numpy = mu_bar_t_cosine_similarity_matrix.cpu().numpy()
+                                cax1 = ax.matshow(mu_bar_t_cosine_similarity_matrix_numpy, cmap='Blues')
+                                ax.set_title(f'Cosine Similarity at t={t_}')
+                                ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                                ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                                for (i_, j_), val in np.ndenumerate(mu_bar_t_cosine_similarity_matrix_numpy):
+                                    ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
 
-            #                     # Plotting distance matrix
-            #                     ax = axes_distance[i // NUM_CLASSES]
-            #                     mu_bar_t_distance_numpy = mu_bar_t_distance.cpu().numpy()
-            #                     cax2 = ax.matshow(mu_bar_t_distance_numpy, cmap='Blues')
-            #                     ax.set_title(f'Distance at t={t_}')
-            #                     ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
-            #                     ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
-            #                     ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
-            #                     for (i_, j_), val in np.ndenumerate(mu_bar_t_distance_numpy):
-            #                         ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
+                                # Plotting distance matrix
+                                ax = axes_distance[i // NUM_CLASSES]
+                                mu_bar_t_distance_numpy = mu_bar_t_distance.cpu().numpy()
+                                cax2 = ax.matshow(mu_bar_t_distance_numpy, cmap='Blues')
+                                ax.set_title(f'Distance at t={t_}')
+                                ax.set_xticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_xticklabels(np.arange(-1, NUM_CLASSES))
+                                ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                                for (i_, j_), val in np.ndenumerate(mu_bar_t_distance_numpy):
+                                    ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
 
-            #                 # Adding a color bar for the last subplot of each figure
-            #                 # plt.colorbar(cax1, ax=axes_cosine[-1], orientation='vertical')
-            #                 # plt.colorbar(cax2, ax=axes_distance[-1], orientation='vertical')
+                            # Adding a color bar for the last subplot of each figure
+                            # plt.colorbar(cax1, ax=axes_cosine[-1], orientation='vertical')
+                            # plt.colorbar(cax2, ax=axes_distance[-1], orientation='vertical')
 
-            #                 # Saving or displaying the figures
-            #                 fig_cosine.suptitle('Cosine Similarity Matrices for Different Timesteps')
-            #                 fig_distance.suptitle('Distance Matrices for Different Timesteps')
+                            # Saving or displaying the figures
+                            fig_cosine.suptitle('Cosine Similarity Matrices for Different Timesteps')
+                            fig_distance.suptitle('Distance Matrices for Different Timesteps')
 
-            #                 # Use wandb to log these images if required
-            #                 wandb_log_images["Cosine Similarity Matrices"] = wandb.Image(fig_cosine)
-            #                 wandb_log_images["Distance Matrices"] = wandb.Image(fig_distance)
+                            # Use wandb to log these images if required
+                            wandb_log_images["Cosine Similarity Matrices"] = wandb.Image(fig_cosine)
+                            wandb_log_images["Distance Matrices"] = wandb.Image(fig_distance)
 
-            #             if self.use_wandb:
-            #                 wandb.log(wandb_log_images, step=self.step)
+                        if self.use_wandb:
+                            wandb.log(wandb_log_images, step=self.step)
                         
-            #         self.ddp_model.train()
+                    self.ddp_model.train()
                 
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
@@ -397,9 +396,9 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
-        print("STEP: ", self.step)
-        self.ddp_model.module.guidance_model.print_mu_diff("loop start")
-        self.ddp_model.module.guidance_model.print_grads("loop start")
+        # print("STEP: ", self.step)
+        # self.ddp_model.module.guidance_model.print_mu_diff("loop start")
+        # self.ddp_model.module.guidance_model.print_grads("loop start")
         self.forward_backward(batch, cond)
 
         # for name, param in self.ddp_model.module.guidance_model.named_parameters():
@@ -407,19 +406,19 @@ class TrainLoop:
         #         grad_norm = th.norm(param.grad)
         #         print(f"Gradient norm for {name}: {grad_norm}")
 
-        self.ddp_model.module.guidance_model.print_mu_diff("before optimize")
-        self.ddp_model.module.guidance_model.print_grads("before optimize")
+        # self.ddp_model.module.guidance_model.print_mu_diff("before optimize")
+        # self.ddp_model.module.guidance_model.print_grads("before optimize")
         took_step = self.mp_trainer.optimize(self.opt)
-        self.ddp_model.module.guidance_model.print_mu_diff("after optimize")
-        self.ddp_model.module.guidance_model.print_grads("after optimize")
+        # self.ddp_model.module.guidance_model.print_mu_diff("after optimize")
+        # self.ddp_model.module.guidance_model.print_grads("after optimize")
         if took_step:
             self._update_ema()
-        self.ddp_model.module.guidance_model.print_mu_diff("after ema")
-        self.ddp_model.module.guidance_model.print_grads("after ema")
+        # self.ddp_model.module.guidance_model.print_mu_diff("after ema")
+        # self.ddp_model.module.guidance_model.print_grads("after ema")
         self._anneal_lr()
         self.log_step()
-        self.ddp_model.module.guidance_model.print_mu_diff("loop end")
-        self.ddp_model.module.guidance_model.print_grads("loop end")
+        # self.ddp_model.module.guidance_model.print_mu_diff("loop end")
+        # self.ddp_model.module.guidance_model.print_grads("loop end")
 
     def forward_backward(self, batch, cond):
         self.mp_trainer.zero_grad()

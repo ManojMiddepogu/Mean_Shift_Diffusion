@@ -131,8 +131,11 @@ class ClusteredTrainLoop:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
             # being specified at the command line.
-            self.guidance_ema_params, self.denoise_ema_params = [
-                self._load_ema_parameters(rate) for rate in self.ema_rate
+            self.guidance_ema_params = [
+                self._load_guidance_ema_parameters(rate) for rate in self.ema_rate
+            ]
+            self.denoise_ema_params = [
+                self._load_denoise_ema_parameters(rate) for rate in self.ema_rate
             ]
         else:
             self.guidance_ema_params = [
@@ -186,31 +189,37 @@ class ClusteredTrainLoop:
 
         dist_util.sync_params(self.model.parameters())
 
-    def _load_ema_parameters(self, rate):
+    def _load_guidance_ema_parameters(self, rate):
         guidance_ema_params = copy.deepcopy(list(self.mp_trainer.model.guidance_model.parameters()))
-        denoise_ema_params = copy.deepcopy(list(self.mp_trainer.model.denoise_model.parameters()))
 
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         guidance_ema_checkpoint = find_guidance_ema_checkpoint(main_checkpoint, self.resume_step, rate)
-        denoise_ema_checkpoint = find_denoise_ema_checkpoint(main_checkpoint, self.resume_step, rate)
         if guidance_ema_checkpoint:
             if dist.get_rank() == 0:
                 logger.log(f"loading EMA from checkpoint: {guidance_ema_checkpoint}...")
                 state_dict = dist_util.load_state_dict(
                     guidance_ema_checkpoint, map_location=dist_util.dev()
                 )
-                guidance_ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
+                guidance_ema_params = self.mp_trainer.state_dict_to_guidance_params(state_dict)
+
+        dist_util.sync_params(guidance_ema_params)
+        return guidance_ema_params
+    
+    def _load_denoise_ema_parameters(self, rate):
+        denoise_ema_params = copy.deepcopy(list(self.mp_trainer.model.denoise_model.parameters()))
+
+        main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
+        denoise_ema_checkpoint = find_denoise_ema_checkpoint(main_checkpoint, self.resume_step, rate)
         if denoise_ema_checkpoint:
             if dist.get_rank() == 0:
                 logger.log(f"loading EMA from checkpoint: {denoise_ema_checkpoint}...")
                 state_dict = dist_util.load_state_dict(
                     denoise_ema_checkpoint, map_location=dist_util.dev()
                 )
-                denoise_ema_params = self.mp_trainer.state_dict_to_master_params(state_dict)
+                denoise_ema_params = self.mp_trainer.state_dict_to_denoise_params(state_dict)
 
-        dist_util.sync_params(guidance_ema_params)
         dist_util.sync_params(denoise_ema_params)
-        return guidance_ema_params, denoise_ema_params
+        return denoise_ema_params
 
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -293,12 +302,11 @@ class ClusteredTrainLoop:
         ):
             batch, cond = next(self.data)
             self.run_step(batch, cond)
-            if self.step % self.log_interval == 0:
+            if (self.step + self.resume_step) % self.log_interval == 0:
                 logger.dumpkvs()
 
-            if self.step < 100 or self.step % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
-            # if self.step % self.save_interval == 0:
-                if self.step % self.save_interval == 0:
+            if (self.step + self.resume_step) < 100 or (self.step + self.resume_step) % self.save_interval in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]:
+                if (self.step + self.resume_step) % self.save_interval == 0:
                     self.save()
 
                 # Sample num_samples_visualize images everytime we save the model
@@ -307,15 +315,15 @@ class ClusteredTrainLoop:
                     wandb_log_images = {}
 
                     with th.no_grad():
-                        if self.step % self.save_interval == 0:
+                        if (self.step + self.resume_step) % self.save_interval == 0:
                             # Generate samples
                             fid_samples = None
-                            if self.step == 0:
+                            if (self.step + self.resume_step) == 0:
                                 run_num_samples = self.num_samples_visualize
                                 run_samples_batch_size = self.num_samples_visualize
                             else:
-                                run_num_samples = self.num_samples if (self.step % self.fid_interval == 0) else self.num_samples_visualize
-                                run_samples_batch_size = self.num_samples_batch_size if (self.step % self.fid_interval == 0) else self.num_samples_visualize
+                                run_num_samples = self.num_samples if ((self.step + self.resume_step) % self.fid_interval == 0) else self.num_samples_visualize
+                                run_samples_batch_size = self.num_samples_batch_size if ((self.step + self.resume_step) % self.fid_interval == 0) else self.num_samples_visualize
 
                             for i in range(0, run_num_samples // run_samples_batch_size):
                                 print(f"Sampling {run_num_samples} Images for batch number {i+1} out of {run_num_samples // self.num_samples_batch_size} batches!")
@@ -345,7 +353,7 @@ class ClusteredTrainLoop:
                                     wandb_log_images["Sampled Images"] = wandb.Image(collage, caption="Sampled Images")
                             print(f"Completed Sampling {run_num_samples} samples!")
 
-                            if (self.step % self.fid_interval == 0):
+                            if ((self.step + self.resume_step) % self.fid_interval == 0):
                                 # Compute FID Score for the generated images
                                 print("FID samples shape:", fid_samples.shape)
                                 if self.training_data_inception_mu_sigma_path != "":
@@ -369,6 +377,7 @@ class ClusteredTrainLoop:
 
                             fig_cosine, axes_cosine = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for cosine similarity
                             fig_distance, axes_distance = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for distance
+                            fig_norm, axes_norm = plt.subplots(1, 11, figsize=(55, 7))  # 11 subplots in a row for norm
 
                             for i in range(0, mu_bar.shape[0], NUM_CLASSES):
                                 t_ = plot_t[i].item()
@@ -379,6 +388,8 @@ class ClusteredTrainLoop:
                                 norm_tensor = F.normalize(mu_bar_t, p=2, dim=1)
                                 mu_bar_t_cosine_similarity_matrix = th.mm(norm_tensor, norm_tensor.t())
                                 mu_bar_t_distance = th.cdist(mu_bar_t, mu_bar_t, p=2)
+
+                                mu_bar_t_norm = th.norm(mu_bar_t, dim=1).unsqueeze(1)
 
                                 # Plotting cosine similarity matrix
                                 ax = axes_cosine[i // NUM_CLASSES]
@@ -403,6 +414,18 @@ class ClusteredTrainLoop:
                                 ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
                                 for (i_, j_), val in np.ndenumerate(mu_bar_t_distance_numpy):
                                     ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
+                                
+                                # Plotting norm matrix
+                                ax = axes_norm[i // NUM_CLASSES]
+                                mu_bar_t_norm_numpy = mu_bar_t_norm.cpu().numpy().T
+                                cax2 = ax.matshow(mu_bar_t_norm_numpy, cmap='Blues')
+                                ax.set_title(f'Norm at t={t_}')
+                                ax.set_xticks(np.arange(1))
+                                ax.set_yticks(np.arange(0, NUM_CLASSES + 1))
+                                ax.set_xticklabels(np.arange(1))
+                                ax.set_yticklabels(np.arange(-1, NUM_CLASSES))
+                                for (i_, j_), val in np.ndenumerate(mu_bar_t_norm_numpy):
+                                    ax.text(j_, i_, f'{val:.2f}', ha='center', va='center', color='black')
 
                             # Adding a color bar for the last subplot of each figure
                             # plt.colorbar(cax1, ax=axes_cosine[-1], orientation='vertical')
@@ -411,13 +434,15 @@ class ClusteredTrainLoop:
                             # Saving or displaying the figures
                             fig_cosine.suptitle('Cosine Similarity Matrices for Different Timesteps')
                             fig_distance.suptitle('Distance Matrices for Different Timesteps')
+                            fig_norm.suptitle('Norm Values for Different Timesteps')
 
                             # Use wandb to log these images if required
                             wandb_log_images["Cosine Similarity Matrices"] = wandb.Image(fig_cosine)
                             wandb_log_images["Distance Matrices"] = wandb.Image(fig_distance)
+                            wandb_log_images["Norm"] = wandb.Image(fig_norm)
 
                         if self.use_wandb:
-                            wandb.log(wandb_log_images, step=self.step)
+                            wandb.log(wandb_log_images, step=(self.step + self.resume_step))
                         
                     self.ddp_model.train()
                 
@@ -427,7 +452,7 @@ class ClusteredTrainLoop:
 
             self.step += 1
         # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
+        if ((self.step + self.resume_step) - 1) % self.save_interval != 0:
             self.save()
 
     def run_step(self, batch, cond):
@@ -483,7 +508,7 @@ class ClusteredTrainLoop:
                 denoise_loss_freeze = False
                 sample_condition = "not-same"
             elif isinstance(self.schedule_sampler, SameTSampler):
-                if self.step >= self.no_guidance_step:
+                if (self.step + self.resume_step) >= self.no_guidance_step:
                     if self.freeze_guidance_after_no_guidance_step:
                         guidance_model_freeze = True
                     else:
@@ -499,7 +524,7 @@ class ClusteredTrainLoop:
                     denoise_loss_freeze = False
                     sample_condition = "same"
             elif isinstance(self.schedule_sampler, AlternateSampler):
-                if self.step >= self.no_guidance_step:
+                if (self.step + self.resume_step) >= self.no_guidance_step:
                     if self.freeze_guidance_after_no_guidance_step:
                         guidance_model_freeze = True
                     else:
@@ -509,7 +534,7 @@ class ClusteredTrainLoop:
                     denoise_loss_freeze = False
                     sample_condition = "not-same"
                 else:
-                    if self.step % 2:
+                    if (self.step + self.resume_step) % 2:
                         guidance_model_freeze = True
                         denoise_model_freeze = False
                         guidance_loss_freeze = True
@@ -522,7 +547,7 @@ class ClusteredTrainLoop:
                         denoise_loss_freeze = False
                         sample_condition = "same"
             elif isinstance(self.schedule_sampler, GANTypeSampler):
-                if self.step >= self.no_guidance_step:
+                if (self.step + self.resume_step) >= self.no_guidance_step:
                     if self.freeze_guidance_after_no_guidance_step:
                         guidance_model_freeze = True
                     else:
@@ -532,7 +557,7 @@ class ClusteredTrainLoop:
                     denoise_loss_freeze = False
                     sample_condition = "not-same"
                 else:
-                    if self.step % 2:
+                    if (self.step + self.resume_step) % 2:
                         guidance_model_freeze = True
                         denoise_model_freeze = False
                         guidance_loss_freeze = True
@@ -591,7 +616,7 @@ class ClusteredTrainLoop:
                 if self.use_wandb:
                     wandb_log_data = {**step_values, **logged_data}
                     wandb_log_data["t"] = t.mean(dtype = th.float)
-                    wandb.log(wandb_log_data, step=self.step)
+                    wandb.log(wandb_log_data, step=(self.step + self.resume_step))
             self.mp_trainer.backward(loss)
 
     def _update_guidance_ema(self):

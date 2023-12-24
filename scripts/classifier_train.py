@@ -32,9 +32,11 @@ def main():
     dist_util.setup_dist()
     logger.configure()
     wandb.init(
-		entity = "llvm",
-		config = args,
-	)
+        entity = "nyu_chanukya",
+        project="Clustered_Diffusion",
+        config = args,
+        name = "classifier_cifar_2",
+    )
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_classifier_and_diffusion(

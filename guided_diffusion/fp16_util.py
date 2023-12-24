@@ -252,6 +252,12 @@ class MixedPrecisionTrainer:
     def state_dict_to_master_params(self, state_dict):
         return state_dict_to_master_params(self.model, state_dict, self.use_fp16)
 
+    def state_dict_to_guidance_params(self, state_dict):
+        return state_dict_to_master_params(self.model.guidance_model, state_dict, self.use_fp16)
+    
+    def state_dict_to_denoise_params(self, state_dict):
+        return state_dict_to_master_params(self.model.denoise_model, state_dict, self.use_fp16)
+
 
 def check_overflow(value):
     return (value == float("inf")) or (value == -float("inf")) or (value != value)
