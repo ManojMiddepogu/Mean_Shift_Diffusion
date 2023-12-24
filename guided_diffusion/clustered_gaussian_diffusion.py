@@ -1,3 +1,4 @@
+import copy
 import enum
 import math
 import random
@@ -153,7 +154,8 @@ class ClusteredGaussianDiffusion:
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
 
-        self.test_print = True
+        self.test_print = False
+        self.previous_mu = None
 
     def q_mean_variance(self, x_start, t, mu_bar_y_t, sigma_bar_y_t):
         mean = (
@@ -468,10 +470,15 @@ class ClusteredGaussianDiffusion:
             noise = th.randn_like(x_start)
         
         terms = {}
+        # print(y)
         
         guidance_model = model.guidance_model
         denoise_model = model.denoise_model
 
+        # guidance_model.print_mu_diff("training loss start")
+        # guidance_model.print_grads("training loss start")
+        y1 = th.randint(0, 2, size=y.size(), dtype=y.dtype).to(device=y.device)
+        y1 = th.where(y1 == y, (y1 + 1) % 2, y1)
         if loss_flags["guidance_model_freeze"]:
             with th.no_grad():
                 mu_bar_y_t, sigma_bar_y_t = guidance_model(t, self.sqrt_one_minus_alphas_cumprod, y)
@@ -490,13 +497,18 @@ class ClusteredGaussianDiffusion:
                 t_incremented = th.where(t_is_zero, t+1, t)
                 mu_bar_y_tp1, sigma_bar_y_tp1 = guidance_model(t_incremented, self.sqrt_one_minus_alphas_cumprod, y)
 
+        # guidance_model.print_mu_diff("training loss mid")
+        # guidance_model.print_grads("training loss mid")_estimate_noise
+
         q_mean, q_variance, q_log_variance = self.q_mean_variance(x_start, t, mu_bar_y_t, sigma_bar_y_t)
         
-        terms["model_mean"] =  mean_flat(mu_bar_y_t**2).mean()
-
+        terms["model_mean"] =  0.0
         terms["guidance_loss"] = 0.0
+        terms["model_sigma"] = 1
         if not loss_flags["guidance_loss_freeze"] and self.mu0sigma1 is False:
             if self.guidance_loss_type == ClusteredGuidanceLossType.JS or self.guidance_loss_type == ClusteredGuidanceLossType.WD:
+                terms["model_mean"] =  (mu_bar_y_t**2).sum() / mu_bar_y_t.shape[0]
+                terms["model_sigma"] = sigma_bar_y_t.mean()
                 b, *shape = q_mean.shape
 
                 # Expand and repeat mean and sigma for vectorized computation
@@ -527,13 +539,15 @@ class ClusteredGaussianDiffusion:
 
                 distance_same = distance_matrix.max(dim=1).values
                 distance_same[distance_same == -float("inf")] = 0.0 # => No same class
+                # distance_same = distance_same
                 distance_diff = distance_matrix_diff.min(dim=1).values
                 distance_diff[distance_diff == float("inf")] = 0.0 # => No diff class
+                # distance_diff = distance_diff
 
                 if self.scale_distance:
-                    terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance * _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, t.shape)))
+                    terms["guidance_loss"] += th.nn.functional.relu(distance_same - distance_diff + self.distance * _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, t.shape))
                 else:                    
-                    terms["guidance_loss"] += th.mean(th.nn.functional.relu(distance_same - distance_diff + self.distance))
+                    terms["guidance_loss"] += th.nn.functional.relu(distance_same - distance_diff + self.distance)
             else:
                 raise NotImplementedError(self.guidance_loss_type)
 
@@ -544,6 +558,10 @@ class ClusteredGaussianDiffusion:
                     model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
             else:
                 model_output = denoise_model(x_t, self._scale_timesteps(t), **model_kwargs)
+
+            # new_model_kwargs = copy.deepcopy(model_kwargs)
+            # new_model_kwargs['y'] = y1
+            # model_output1 = denoise_model(x_t, self._scale_timesteps(t), **new_model_kwargs)
 
             if self.model_var_type not in [ClusteredModelVarType.FIXED_SMALL, ClusteredModelVarType.FIXED_LARGE]:
                 raise NotImplementedError(f"Model Var Type {self.model_var_type} not implemented!")
@@ -559,15 +577,19 @@ class ClusteredGaussianDiffusion:
                 terms["denoise_loss"] = 0.0
             else:
                 terms["denoise_loss"] = mean_flat((target - model_output) ** 2)
+                # terms["contrastive denoise loss"] = mean_flat((target - model_output1) ** 2)
             # if "vb" in terms: # CHECK - THIS TERM DOESN'T EXIST UNLESS WE LEARN SIGMA CASE? HOW IS THIS APPLICABLE IN OUR CASE? WE ARE LEARNING SIGMS IN SOME SENSE?
             #     terms["denoise_loss"] = terms["denoise_mse"] + terms["vb"]
             # else:
             #     terms["denoise_loss"] = terms["denoise_mse"]
         else:
             raise NotImplementedError(self.denoise_loss_type)
-
+        # terms["contrastive denoise loss"] = th.nn.functional.relu(terms["contrastive denoise loss"] - terms["denoise_loss"] + 0.5)
         # CHECK - ADD WEIGHTS HERE FOR LOSSES?
-        terms["loss"] = terms["guidance_loss"] + terms["denoise_loss"]
+        # terms["loss"] = terms["guidance_loss"] + (0.1 * terms["model_mean"]) + terms["denoise_loss"] + terms["contrastive denoise loss"]
+        terms["loss"] = terms["guidance_loss"] + (0.01 * terms["model_mean"]) + terms["denoise_loss"]
+        # guidance_model.print_mu_diff("training loss end")
+        # guidance_model.print_grads("training loss end")
         return terms
 
 

@@ -97,6 +97,9 @@ class Guidance_Model(nn.Module):
 
         self.mu0sigma1 = mu0sigma1
 
+        self.prev_mu = None
+        self.sqrt_one_minus_alphas_cumprod = None
+
     def forward(self, timesteps, sqrt_one_minus_alphas_cumprod, y=None):
     # def forward(self, timesteps, y=None):
         """
@@ -105,6 +108,9 @@ class Guidance_Model(nn.Module):
         :return: an [N x C x H x W] Tensor of outputs.
         """
         assert (y is not None) , "must specify y"
+
+        if self.sqrt_one_minus_alphas_cumprod is None:
+            self.sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod
 
         if self.mu0sigma1:
             mu = th.zeros(timesteps.shape[0], self.out_channels, self.image_size, self.image_size, device=timesteps.device)
@@ -134,6 +140,26 @@ class Guidance_Model(nn.Module):
             mu, sigma = mu.detach(), sigma.detach()
 
         return mu, sigma
+
+    def print_mu_diff(self, string):
+        print(string)
+        if self.sqrt_one_minus_alphas_cumprod is None:
+            print("None")
+        else:
+            t_dash = th.arange(0, 1000, 100).to(device = "cuda:0")
+            y_dash = th.zeros_like(t_dash)
+            mu_bar_temp, _ = self.forward(t_dash, self.sqrt_one_minus_alphas_cumprod, y_dash)
+            if self.prev_mu is None:
+                self.prev_mu = mu_bar_temp
+            print(th.norm(self.prev_mu - mu_bar_temp))
+            self.prev_mu = mu_bar_temp
+    
+    def print_grads(self, string):
+        print(f"GRADS {string}")
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                grad_norm = th.norm(param.grad)
+                print(f"Gradient norm for {name}: {grad_norm}")
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """
