@@ -1,7 +1,7 @@
 #!/bin/bash
 
-data_dir="/scratch/crg9968/datasets/cifar10_2/train"
-training_data_inception_mu_sigma_path="/scratch/crg9968/datasets/cifar10_2/cifar_train_mu_sigma.npz"
+data_dir="/scratch/crg9968/datasets/cifar2/train"
+training_data_inception_mu_sigma_path="/scratch/crg9968/datasets/cifar2/cifar_train_mu_sigma.npz"
 distance=0.1
 no_guidance_step=4000
 lr_anneal_steps=50001
