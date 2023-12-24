@@ -18,6 +18,7 @@ Update the appropriate paths to download the datasets and run:
 ```
 python datasets/cifar-10.py
 python datasets/cifar-2.py
+python datasets/mnist.py
 ```
 
 ## Mu and Sigma for FID Computation
@@ -25,6 +26,7 @@ To comptue FID of generated samples with the dataset, we compute the mu and sigm
 ```
 python3 scripts/compute_fid_score.py --batch-size 512 --save-stats datasets/cifar10/cifar_train_reference.npz datasets/cifar10/cifar_train_mu_sigma.npz
 python3 scripts/compute_fid_score.py --batch-size 512 --save-stats datasets/cifar2/cifar_train_reference.npz datasets/cifar2/cifar_train_mu_sigma.npz
+python3 scripts/compute_fid_score.py --batch-size 512 --save-stats datasets/mnist/mnist_train_reference.npz datasets/mnist/mnist_train_mu_sigma.npz
 ```
 
 ## Run Experiments
